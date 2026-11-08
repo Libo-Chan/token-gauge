@@ -6,7 +6,7 @@ A small always-on-top Windows desktop widget that shows your **Claude Code** and
 
 > **Unofficial project.** Not affiliated with, endorsed by, or supported by Anthropic or OpenAI. "Claude" and "Codex" are trademarks of their respective owners and are used here only to describe what the tool reads.
 
-<p align="center"><img src="docs/screenshot.png" alt="Token Gauge widget" width="300"></p>
+<p align="center"><img src="docs/screenshot-en.png" alt="Token Gauge widget" width="300"></p>
 
 ## Features
 
