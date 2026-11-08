@@ -5,7 +5,7 @@
 
 $ErrorActionPreference = 'Stop'
 $AppName    = 'Token Gauge'
-$AppVersion = '0.1.1'
+$AppVersion = '0.2.0'
 $MainScript = $PSCommandPath
 $ScriptDir  = $PSScriptRoot
 
@@ -38,7 +38,7 @@ function Log($msg) {
     try { Add-Content -LiteralPath $LogPath -Value ("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg) -Encoding UTF8 } catch {}
 }
 
-$Cfg = @{ Left = $null; Top = $null; Topmost = $true; Language = 'auto'; Thresholds = @(20, 10); LocalRefreshSec = 15; QuotaRefreshSec = 120 }
+$Cfg = @{ Left = $null; Top = $null; Topmost = $true; Language = 'auto'; Thresholds = @(20, 10); LocalRefreshSec = 15; QuotaRefreshSec = 120; EdgeDock = $true; Dock = $null }
 if (Test-Path -LiteralPath $SettingsPath) {
     try {
         $j = [IO.File]::ReadAllText($SettingsPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
@@ -46,6 +46,7 @@ if (Test-Path -LiteralPath $SettingsPath) {
     } catch { Log "settings: $_" }
 }
 if ([double]$Cfg.LocalRefreshSec -lt 5) { $Cfg.LocalRefreshSec = 5 }
+if ($Cfg.Dock) { $d0 = $Cfg.Dock; $Cfg.Dock = @{ Edge = [string]$d0.Edge; Pos = [int]$d0.Pos; Screen = [string]$d0.Screen; Pinned = [bool]$d0.Pinned } }
 if ([double]$Cfg.QuotaRefreshSec -lt 60) { $Cfg.QuotaRefreshSec = 60 }   # be gentle with the quota endpoint
 function Save-Settings {
     try { [IO.File]::WriteAllText($SettingsPath, ($Cfg | ConvertTo-Json), (New-Object Text.UTF8Encoding($false))) } catch { Log "save: $_" }
@@ -54,6 +55,7 @@ function Save-Settings {
 # ---------- strings (add a language: copy the 'en' block, translate, add it to $LangOrder) ----------
 $Strings = @{
     'en' = @{
+        TipKeep = 'Keep shown (do not auto-hide at the screen edge)'; MenuEdge = 'Auto-hide at screen edge'; MarkerTip = 'Click to show Token Gauge'
         AsOf = ' (limits shown are from {0})'
         Native = 'English'; Font = ''
         Header = 'TOKEN USAGE'; Today = 'tokens today'; H5 = '5-hour limit'; D7 = 'Weekly limit'
@@ -77,6 +79,7 @@ $Strings = @{
         Tip5h = '{0} 5h: {1:0}% left'
     }
     'zh-CN' = @{
+        TipKeep = '长期显示（贴边时不自动隐藏）'; MenuEdge = '贴边自动隐藏'; MarkerTip = '点击显示 Token Gauge'
         AsOf = '（显示的是 {0} 的额度数据）'
         Native = '简体中文'; Font = 'Microsoft YaHei UI'
         Header = 'TOKEN 用量'; Today = '今日 tokens'; H5 = '5 小时额度'; D7 = '每周额度'
@@ -100,6 +103,7 @@ $Strings = @{
         Tip5h = '{0} 5h 剩余 {1:0}%'
     }
     'zh-TW' = @{
+        TipKeep = '長期顯示（貼邊時不自動隱藏）'; MenuEdge = '貼邊自動隱藏'; MarkerTip = '按一下以顯示 Token Gauge'
         AsOf = '（顯示的是 {0} 的額度資料）'
         Native = '繁體中文'; Font = 'Microsoft JhengHei UI'
         Header = 'TOKEN 用量'; Today = '今日 tokens'; H5 = '5 小時額度'; D7 = '每週額度'
@@ -123,6 +127,7 @@ $Strings = @{
         Tip5h = '{0} 5h 剩餘 {1:0}%'
     }
     'ja' = @{
+        TipKeep = '常に表示（画面の端で自動的に隠さない）'; MenuEdge = '画面の端で自動的に隠す'; MarkerTip = 'クリックして Token Gauge を表示'
         AsOf = '（表示中の上限は {0} 時点のデータです）'
         Native = '日本語'; Font = 'Yu Gothic UI'
         Header = 'トークン使用量'; Today = '本日のトークン'; H5 = '5 時間の上限'; D7 = '週間の上限'
@@ -146,6 +151,7 @@ $Strings = @{
         Tip5h = '{0} 5h 残り {1:0}%'
     }
     'ko' = @{
+        TipKeep = '항상 표시 (화면 가장자리에서 자동으로 숨기지 않음)'; MenuEdge = '화면 가장자리에서 자동 숨기기'; MarkerTip = '클릭하여 Token Gauge 표시'
         AsOf = ' (표시된 한도는 {0} 기준)'
         Native = '한국어'; Font = 'Malgun Gothic'
         Header = '토큰 사용량'; Today = '오늘 토큰'; H5 = '5시간 한도'; D7 = '주간 한도'
@@ -553,6 +559,7 @@ $WindowXaml = @'
         <TextBlock x:Name="HeaderText" Text=" " FontSize="11" FontWeight="SemiBold" Foreground="#73FFFFFF" VerticalAlignment="Center"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
           <Button x:Name="BtnRefresh" Style="{StaticResource IconBtn}" Content="&#xE72C;"/>
+          <Button x:Name="BtnKeep" Style="{StaticResource IconBtn}" Content="&#xE890;" Visibility="Collapsed"/>
           <Button x:Name="BtnPin" Style="{StaticResource IconBtn}" Content="&#xE718;"/>
           <Button x:Name="BtnHide" Style="{StaticResource IconBtn}" Content="&#xE921;"/>
         </StackPanel>
@@ -571,7 +578,7 @@ $app.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown
 $win = [Windows.Markup.XamlReader]::Parse($WindowXaml)
 
 $UI = @{}
-foreach ($n in 'Root','BtnRefresh','BtnPin','BtnHide','Footer','HeaderText') { $UI[$n] = $win.FindName($n) }
+foreach ($n in 'Root','BtnRefresh','BtnKeep','BtnPin','BtnHide','Footer','HeaderText') { $UI[$n] = $win.FindName($n) }
 foreach ($p in 'C','X') {
     foreach ($n in 'Plan','Today','TodayLbl','Detail','Msg') { $UI["${p}_$n"] = $win.FindName("${p}_$n") }
     foreach ($b in 'H5','D7') { foreach ($n in 'Pct','Bar','Fill','Reset','Lbl') { $UI["${p}_${b}_$n"] = $win.FindName("${p}_${b}_$n") } }
@@ -696,7 +703,7 @@ function New-TrayIcon($argb) {
     return [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
 }
 $TrayIcons = @{ Green = New-TrayIcon 0xFF2FB350; Amber = New-TrayIcon 0xFFE8900A; Red = New-TrayIcon 0xFFE5392F }
-function Set-TrayLevel($lvl) { if ($S.TrayLevel -ne $lvl) { $S.TrayLevel = $lvl; $Tray.Icon = $TrayIcons[$lvl] } }
+function Set-TrayLevel($lvl) { if ($S.TrayLevel -ne $lvl) { $S.TrayLevel = $lvl; $Tray.Icon = $TrayIcons[$lvl]; if ($MarkerBar) { $MarkerBar.Background = $Brush[$lvl] } } }
 
 $Tray = New-Object System.Windows.Forms.NotifyIcon
 $Tray.Icon = $TrayIcons.Green
@@ -723,6 +730,7 @@ $miShow = $Menu.Items.Add($T.MenuShow)
 $miRefresh = $Menu.Items.Add($T.MenuRefresh)
 $miTop = New-Object System.Windows.Forms.ToolStripMenuItem($T.MenuTop); [void]$Menu.Items.Add($miTop)
 $miAuto = New-Object System.Windows.Forms.ToolStripMenuItem($T.MenuAuto); [void]$Menu.Items.Add($miAuto)
+$miEdge = New-Object System.Windows.Forms.ToolStripMenuItem($T.MenuEdge); [void]$Menu.Items.Add($miEdge)
 $miFolder = $Menu.Items.Add($T.MenuFolder)
 [void]$Menu.Items.Add('-')
 $miLang = New-Object System.Windows.Forms.ToolStripMenuItem('Language'); [void]$Menu.Items.Add($miLang)
@@ -738,7 +746,7 @@ foreach ($code in @('auto') + $LangOrder) {
 $miExit = $Menu.Items.Add($T.MenuExit)
 $Tray.ContextMenuStrip = $Menu
 $Menu.Add_Opening({
-    $miTop.Checked = $win.Topmost; $miAuto.Checked = (Test-Autostart)
+    $miTop.Checked = [bool]$Cfg.Topmost; $miAuto.Checked = (Test-Autostart); $miEdge.Checked = [bool]$Cfg.EdgeDock
     $cur = [string]$Cfg.Language; if (-not $LangItems.ContainsKey($cur)) { $cur = 'auto' }
     foreach ($k in $LangItems.Keys) { $LangItems[$k].Checked = ($k -eq $cur) }
 })
@@ -749,14 +757,15 @@ function Apply-Language {
     if ($T.Font) { $font += ', ' + $T.Font }
     $win.FontFamily = New-Object System.Windows.Media.FontFamily($font)
     $UI.HeaderText.Text = $T.Header
-    $UI.BtnRefresh.ToolTip = $T.TipRefresh; $UI.BtnPin.ToolTip = $T.TipPin; $UI.BtnHide.ToolTip = $T.TipHide
+    $UI.BtnRefresh.ToolTip = $T.TipRefresh; $UI.BtnPin.ToolTip = $T.TipPin; $UI.BtnHide.ToolTip = $T.TipHide; $UI.BtnKeep.ToolTip = $T.TipKeep
     foreach ($p in 'C','X') {
         $UI["${p}_TodayLbl"].Text = $T.Today
         $UI["${p}_H5_Lbl"].Text = $T.H5
         $UI["${p}_D7_Lbl"].Text = $T.D7
     }
     $miShow.Text = $T.MenuShow; $miRefresh.Text = $T.MenuRefresh; $miTop.Text = $T.MenuTop
-    $miAuto.Text = $T.MenuAuto; $miFolder.Text = $T.MenuFolder; $miExit.Text = $T.MenuExit
+    $miAuto.Text = $T.MenuAuto; $miEdge.Text = $T.MenuEdge; $miFolder.Text = $T.MenuFolder; $miExit.Text = $T.MenuExit
+    if ($MarkerHit) { $MarkerHit.ToolTip = $T.MarkerTip }
     $miLang.Text = $(if ($Lang -eq 'en') { 'Language' } else { $T.MenuLang + ' / Language' })
     $LangItems['auto'].Text = $T.LangAuto
     foreach ($code in $LangOrder) { $LangItems[$code].Text = $Strings[$code].Native }
@@ -771,8 +780,11 @@ function Set-Language([string]$code) {
 }
 Apply-Language
 
-function Toggle-Window { if ($win.IsVisible) { $win.Hide() } else { $win.Show(); [void]$win.Activate() } }
-function Set-Topmost([bool]$v) { $win.Topmost = $v; $Cfg.Topmost = $v; $UI.BtnPin.Foreground = $(if ($v) { $Brush.Pin } else { $Brush.Dim }); Save-Settings }
+function Toggle-Window {
+    if (Is-Docked) { if ($win.IsVisible) { Hide-Docked } else { Show-Docked; [void]$win.Activate() }; return }
+    if ($win.IsVisible) { $win.Hide() } else { $win.Show(); [void]$win.Activate() }
+}
+function Set-Topmost([bool]$v) { if (-not (Is-Docked)) { $win.Topmost = $v }; $Cfg.Topmost = $v; $UI.BtnPin.Foreground = $(if ($v) { $Brush.Pin } else { $Brush.Dim }); Save-Settings }
 function Refresh-Now { $S.ClaudeDirsAt = $null; $S.NextLocal = [DateTime]::MinValue; $S.NextQuota = [DateTime]::MinValue; Tick }
 function Save-Position { $Cfg.Left = $win.Left; $Cfg.Top = $win.Top; Save-Settings }
 function Exit-App {
@@ -784,16 +796,22 @@ function Exit-App {
 $Tray.Add_MouseDoubleClick({ Toggle-Window })
 $miShow.Add_Click({ Toggle-Window })
 $miRefresh.Add_Click({ Refresh-Now })
-$miTop.Add_Click({ Set-Topmost (-not $win.Topmost) })
+$miTop.Add_Click({ Set-Topmost (-not [bool]$Cfg.Topmost) })
 $miAuto.Add_Click({ try { Set-Autostart (-not (Test-Autostart)) } catch { Log "autostart: $_" } })
+$miEdge.Add_Click({ try { Set-EdgeDock (-not [bool]$Cfg.EdgeDock) } catch { Log "edge dock: $_" } })
 $miFolder.Add_Click({ Start-Process explorer.exe $AppDir })
 $miExit.Add_Click({ Exit-App })
 
 # ---------- window ----------
-$UI.Root.Add_MouseLeftButtonDown({ try { $win.DragMove(); Save-Position } catch {} })
+$UI.Root.Add_MouseLeftButtonDown({
+    $x0 = $win.Left; $y0 = $win.Top
+    try { $win.DragMove() } catch {}
+    try { After-Drag $x0 $y0 } catch { Log "dock: $($_.Exception.Message) @ $($_.InvocationInfo.ScriptLineNumber)" }
+})
 $UI.BtnRefresh.Add_Click({ Refresh-Now })
-$UI.BtnPin.Add_Click({ Set-Topmost (-not $win.Topmost) })
-$UI.BtnHide.Add_Click({ $win.Hide() })
+$UI.BtnPin.Add_Click({ Set-Topmost (-not [bool]$Cfg.Topmost) })
+$UI.BtnKeep.Add_Click({ try { Toggle-KeepShown } catch { Log "keep shown: $_" } })
+$UI.BtnHide.Add_Click({ $DockTimer.Stop(); $win.Hide(); $Marker.Hide() })
 
 $wa = [System.Windows.SystemParameters]::WorkArea
 $vl = [System.Windows.SystemParameters]::VirtualScreenLeft; $vt = [System.Windows.SystemParameters]::VirtualScreenTop
@@ -805,6 +823,182 @@ if ($null -ne $Cfg.Left -and $null -ne $Cfg.Top -and $Cfg.Left -ge $vl -and $Cfg
 }
 $win.Topmost = [bool]$Cfg.Topmost
 $UI.BtnPin.Foreground = $(if ($win.Topmost) { $Brush.Pin } else { $Brush.Dim })
+
+# ---------- edge docking: drag to a screen edge to tuck the widget away behind a small marker ----------
+# Worked out in screen pixels (WinForms) and converted to WPF units for placing windows.
+$CardMargin = 12          # transparent margin (shadow room) between the window edge and the visible card
+$MarkerLong = 64; $MarkerThick = 12; $MarkerBarThick = 5
+
+$MarkerXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Token Gauge marker" WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True" ShowActivated="False" Width="12" Height="64">
+  <Border x:Name="Hit" Background="#01000000" Cursor="Hand">
+    <Border x:Name="Bar" CornerRadius="3" Background="#FF34C759" Opacity="0.55"/>
+  </Border>
+</Window>
+'@
+$Marker = [Windows.Markup.XamlReader]::Parse($MarkerXaml)
+$MarkerHit = $Marker.FindName('Hit'); $MarkerBar = $Marker.FindName('Bar')
+$MarkerHit.Add_MouseEnter({ $MarkerBar.Opacity = 1.0 })
+$MarkerHit.Add_MouseLeave({ $MarkerBar.Opacity = 0.55 })
+$MarkerHit.Add_MouseLeftButtonUp({ try { Show-Docked } catch { Log "dock show: $_" } })
+
+function To-Px([double]$x, [double]$y) {
+    $src = [System.Windows.PresentationSource]::FromVisual($win)
+    if (-not $src) { return New-Object System.Windows.Point($x, $y) }
+    return $src.CompositionTarget.TransformToDevice.Transform((New-Object System.Windows.Point($x, $y)))
+}
+function To-Dip([double]$x, [double]$y) {
+    $src = [System.Windows.PresentationSource]::FromVisual($win)
+    if (-not $src) { return New-Object System.Windows.Point($x, $y) }
+    return $src.CompositionTarget.TransformFromDevice.Transform((New-Object System.Windows.Point($x, $y)))
+}
+function Get-CardRectPx {
+    $a = To-Px ($win.Left + $CardMargin) ($win.Top + $CardMargin)
+    $b = To-Px ($win.Left + $win.ActualWidth - $CardMargin) ($win.Top + $win.ActualHeight - $CardMargin)
+    return @{ L = $a.X; T = $a.Y; R = $b.X; B = $b.Y }
+}
+# true when no monitor continues past this point (so this is an outer edge of the desktop, not a seam between screens)
+function Test-OuterPoint([int]$x, [int]$y) {
+    foreach ($sc in [System.Windows.Forms.Screen]::AllScreens) { if ($sc.Bounds.Contains($x, $y)) { return $false } }
+    return $true
+}
+function Get-DockScreen {
+    $d = $Cfg.Dock
+    if (-not $d) { return $null }
+    foreach ($sc in [System.Windows.Forms.Screen]::AllScreens) { if ($sc.DeviceName -eq $d.Screen) { return $sc } }
+    return $null
+}
+function Is-Docked { return [bool]($Cfg.EdgeDock -and $Cfg.Dock -and (Get-DockScreen)) }
+
+# after a real drag: which outer edge (left / right / top) was the widget dropped on, if any
+function Find-DockEdge {
+    $c = [System.Windows.Forms.Cursor]::Position
+    $sc = [System.Windows.Forms.Screen]::FromPoint($c)
+    $wa = $sc.WorkingArea; $bd = $sc.Bounds
+    $r = Get-CardRectPx
+    $th = 6
+    $best = $null; $bestDist = [double]::MaxValue
+    $cy = [Math]::Min([Math]::Max($c.Y, $wa.Top), $wa.Bottom - 1)
+    $cx = [Math]::Min([Math]::Max($c.X, $wa.Left), $wa.Right - 1)
+    if (($c.X -le $wa.Left + $th -or $r.L -le $wa.Left + 1) -and (Test-OuterPoint ($bd.Left - 1) $cy)) {
+        $dist = [Math]::Min($c.X - $wa.Left, $r.L - $wa.Left); if ($dist -lt $bestDist) { $bestDist = $dist; $best = @{ Edge = 'left'; Pos = $cy } } }
+    if (($c.X -ge $wa.Right - 1 - $th -or $r.R -ge $wa.Right - 1) -and (Test-OuterPoint $bd.Right $cy)) {
+        $dist = [Math]::Min($wa.Right - 1 - $c.X, $wa.Right - $r.R); if ($dist -lt $bestDist) { $bestDist = $dist; $best = @{ Edge = 'right'; Pos = $cy } } }
+    if (($c.Y -le $wa.Top + $th -or $r.T -le $wa.Top + 1) -and (Test-OuterPoint $cx ($bd.Top - 1))) {
+        $dist = [Math]::Min($c.Y - $wa.Top, $r.T - $wa.Top); if ($dist -lt $bestDist) { $bestDist = $dist; $best = @{ Edge = 'top'; Pos = $cx } } }
+    if ($best) { $best.Screen = $sc.DeviceName }
+    return $best
+}
+
+function Get-DockGeometry {
+    $sc = Get-DockScreen; $wa = $sc.WorkingArea
+    $tl = To-Dip $wa.Left $wa.Top; $br = To-Dip $wa.Right $wa.Bottom
+    $d = $Cfg.Dock
+    $p = if ($d.Edge -eq 'top') { To-Dip ([double]$d.Pos) $wa.Top } else { To-Dip $wa.Left ([double]$d.Pos) }
+    return @{ L = $tl.X; T = $tl.Y; R = $br.X; B = $br.Y; X = $p.X; Y = $p.Y }
+}
+function Clamp([double]$v, [double]$lo, [double]$hi) { if ($hi -lt $lo) { return $lo }; return [Math]::Min([Math]::Max($v, $lo), $hi) }
+
+function Place-Marker {
+    $g = Get-DockGeometry; $e = $Cfg.Dock.Edge
+    if ($e -eq 'top') {
+        $Marker.Width = $MarkerLong; $Marker.Height = $MarkerThick
+        $Marker.Left = Clamp ($g.X - $MarkerLong / 2) $g.L ($g.R - $MarkerLong); $Marker.Top = $g.T
+        $MarkerBar.Width = [double]::NaN; $MarkerBar.Height = $MarkerBarThick
+        $MarkerBar.HorizontalAlignment = 'Stretch'; $MarkerBar.VerticalAlignment = 'Top'
+    } else {
+        $Marker.Width = $MarkerThick; $Marker.Height = $MarkerLong
+        $Marker.Top = Clamp ($g.Y - $MarkerLong / 2) $g.T ($g.B - $MarkerLong)
+        $Marker.Left = $(if ($e -eq 'left') { $g.L } else { $g.R - $MarkerThick })
+        $MarkerBar.Height = [double]::NaN; $MarkerBar.Width = $MarkerBarThick
+        $MarkerBar.VerticalAlignment = 'Stretch'; $MarkerBar.HorizontalAlignment = $(if ($e -eq 'left') { 'Left' } else { 'Right' })
+    }
+}
+# put the card flush against the docked edge, next to where the marker is
+function Place-DockedWindow {
+    $g = Get-DockGeometry; $e = $Cfg.Dock.Edge
+    $w = $win.ActualWidth; $h = $win.ActualHeight
+    if ($e -eq 'top') {
+        $win.Top = $g.T - $CardMargin
+        $win.Left = Clamp ($g.X - $w / 2) ($g.L - $CardMargin) ($g.R - $w + $CardMargin)
+    } else {
+        $win.Top = Clamp ($g.Y - 40 - $CardMargin) ($g.T - $CardMargin) ($g.B - $h + $CardMargin)
+        $win.Left = $(if ($e -eq 'left') { $g.L - $CardMargin } else { $g.R - $w + $CardMargin })
+    }
+}
+
+$DockTimer = New-Object System.Windows.Threading.DispatcherTimer
+$DockTimer.Interval = [TimeSpan]::FromMilliseconds(150)
+$S.DockLastInside = Get-Date
+
+function Hide-Docked {
+    $DockTimer.Stop()
+    $win.Hide()
+    Place-Marker
+    $Marker.Show()
+}
+function Show-Docked {
+    if (-not (Is-Docked)) { $win.Show(); return }
+    $Marker.Hide()
+    $win.Topmost = $true
+    $win.Show()
+    Place-DockedWindow
+    $S.DockLastInside = Get-Date
+    if (-not $Cfg.Dock.Pinned) { $DockTimer.Start() }
+}
+# auto-hide once the mouse has left the card for a moment (not while a button is held, e.g. during a drag)
+function Watch-Dock {
+    if (-not (Is-Docked) -or $Cfg.Dock.Pinned -or -not $win.IsVisible) { $DockTimer.Stop(); return }
+    if ([System.Windows.Forms.Control]::MouseButtons -ne [System.Windows.Forms.MouseButtons]::None) { $S.DockLastInside = Get-Date; return }
+    $c = [System.Windows.Forms.Cursor]::Position; $r = Get-CardRectPx; $pad = 6
+    if ($c.X -ge $r.L - $pad -and $c.X -le $r.R + $pad -and $c.Y -ge $r.T - $pad -and $c.Y -le $r.B + $pad) { $S.DockLastInside = Get-Date; return }
+    if (((Get-Date) - $S.DockLastInside).TotalMilliseconds -gt 600) { Hide-Docked }
+}
+$DockTimer.Add_Tick({ try { Watch-Dock } catch { Log "dock watch: $_" } })
+
+function Update-DockUI {
+    $docked = Is-Docked
+    $UI.BtnKeep.Visibility = $(if ($docked) { 'Visible' } else { 'Collapsed' })
+    $UI.BtnKeep.Foreground = $(if ($docked -and $Cfg.Dock.Pinned) { $Brush.Pin } else { $Brush.Dim })
+}
+function Undock {
+    $Cfg.Dock = $null; Save-Settings
+    $DockTimer.Stop(); $Marker.Hide()
+    $win.Topmost = [bool]$Cfg.Topmost
+    if (-not $win.IsVisible) { $win.Show() }
+    Update-DockUI
+}
+function Toggle-KeepShown {
+    if (-not (Is-Docked)) { return }
+    $Cfg.Dock.Pinned = -not [bool]$Cfg.Dock.Pinned; Save-Settings
+    Update-DockUI
+    if ($Cfg.Dock.Pinned) { $DockTimer.Stop() } else { $S.DockLastInside = Get-Date; $DockTimer.Start() }
+}
+function Set-EdgeDock([bool]$on) {
+    $Cfg.EdgeDock = $on; Save-Settings
+    if (-not $on -and $Cfg.Dock) { Undock }
+}
+
+# called after the user releases the mouse on the card
+function After-Drag([double]$x0, [double]$y0) {
+    if ([Math]::Abs($win.Left - $x0) -lt 2 -and [Math]::Abs($win.Top - $y0) -lt 2) { return }   # just a click, not a drag
+    $hit = $null
+    if ($Cfg.EdgeDock) { $hit = Find-DockEdge }
+    if ($hit) {
+        $keep = [bool]($Cfg.Dock -and $Cfg.Dock.Pinned)
+        $Cfg.Dock = @{ Edge = $hit.Edge; Pos = [int]$hit.Pos; Screen = $hit.Screen; Pinned = $keep }
+        Save-Settings
+        Update-DockUI
+        if ($keep) { Show-Docked } else { Hide-Docked }
+    } else {
+        if ($Cfg.Dock) { Undock }
+        Save-Position
+    }
+}
+$MarkerHit.ToolTip = $T.MarkerTip
 
 # ---------- main loop ----------
 function Tick {
@@ -821,7 +1015,14 @@ $timer.Interval = [TimeSpan]::FromSeconds(1)
 $timer.Add_Tick({ try { Tick } catch { Log "tick: $($_.Exception.Message) @ $($_.InvocationInfo.ScriptLineNumber)" } })
 
 Load-QuotaCache
+$startDocked = Is-Docked
+if (-not $startDocked -and $Cfg.Dock) { $Cfg.Dock = $null }          # the screen it was docked to is gone
+if ($startDocked -and -not $Cfg.Dock.Pinned) { $win.Opacity = 0 }   # avoid a flash before tucking it away
 $win.Show()
+if ($startDocked) {
+    if ($Cfg.Dock.Pinned) { Show-Docked } else { Hide-Docked; $win.Opacity = 1 }
+}
+Update-DockUI
 try { Tick } catch { Log "first tick: $($_.Exception.Message) @ $($_.InvocationInfo.ScriptLineNumber)" }
 $timer.Start()
 [void]$app.Run()

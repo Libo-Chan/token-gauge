@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 - 2026-11-08
+
+- New: edge auto-hide. Drag the widget to the left, right or top edge of the screen and let go: it tucks away and leaves a small translucent marker where you dropped it. Click the marker to bring the widget back; it hides again when the mouse leaves. Drag it away from the edge to keep it on screen as before.
+- New: "keep shown" button (eye icon) appears while docked at an edge, so the widget stays visible there without auto-hiding.
+- New: tray menu option to turn edge auto-hide off.
+- The marker uses the same green / amber / red color as the tray icon.
+
 ## 0.1.1 - 2026-11-08
 
 - Fixed: Codex usage could stop updating when a Codex session ran past midnight. Windows does not refresh the last-write time of a log file that Codex keeps open, so that session was skipped; the widget now reads every session from the last few days and counts entries by their own timestamps.

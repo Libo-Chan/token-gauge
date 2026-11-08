@@ -17,6 +17,7 @@ A small always-on-top Windows desktop widget that shows your **Claude Code** and
 - **Low-quota notifications** when a limit drops below 20 % and 10 % (configurable)
 - Tray icon whose color follows your tightest limit; right-click menu for always-on-top, start with Windows, refresh, exit
 - **5 UI languages**, switchable live from the tray menu: English, 简体中文, 繁體中文, 日本語, 한국어 (follows your Windows language by default)
+- **Edge auto-hide**: drag it to the left, right or top edge of the screen and it tucks away behind a small marker; click the marker to bring it back
 - Draggable, remembers its position
 - Single PowerShell script on the built-in **Windows PowerShell 5.1 + WPF**. Nothing to install, no admin rights, no telemetry
 
@@ -68,6 +69,14 @@ Notes:
 - Sends nothing anywhere else. No analytics, no update checks.
 - Settings and an error log live in `%APPDATA%\TokenGauge`.
 
+## Edge auto-hide
+
+- **Hide**: drag the widget to the left, right or top edge of the screen and release. It hides and leaves a small translucent bar at the edge where you dropped it. The bar is green, amber or red like the tray icon.
+- **Show**: click the bar. The widget slides back next to it and hides again about half a second after the mouse leaves it.
+- **Keep it visible**: drag it anywhere away from the edges, or, while it is at an edge, click the eye button in its title bar ("keep shown"). Click the eye again to go back to auto-hide.
+- Only outer edges of your desktop count. The edge between two monitors does not, so moving the widget to another screen never hides it. The bottom edge (usually the taskbar) is not used.
+- To turn the feature off: right-click the tray icon → **Auto-hide at screen edge**.
+
 ## Settings
 
 To change the language, right-click the tray icon → **Language** and pick one. It switches immediately and is remembered.
@@ -81,6 +90,7 @@ For the other settings: right-click the tray icon → *Open settings folder*, ed
 | `LocalRefreshSec` | `15` | How often local logs are rescanned (min 5) |
 | `QuotaRefreshSec` | `120` | How often the Claude quota is fetched (min 60) |
 | `Topmost` | `true` | Keep the widget above other windows |
+| `EdgeDock` | `true` | Allow edge auto-hide (same as the tray menu option) |
 
 Environment variables `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected.
 
