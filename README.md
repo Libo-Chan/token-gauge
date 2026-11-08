@@ -88,6 +88,9 @@ Environment variables `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected.
 
 - **Nothing appears:** check the tray (click `^` to see hidden icons). Run `powershell -ExecutionPolicy Bypass -STA -File "%LOCALAPPDATA%\Programs\TokenGauge\TokenGauge.ps1"` from a terminal to see errors, and look in `%APPDATA%\TokenGauge\error.log`.
 - **Claude: "login not found":** sign in to the Claude Code CLI, see above.
+- **Claude: "Login token expired" and the bars are empty or old:** the Claude Code CLI's login token only lasts a few hours and is renewed when you run `claude`. Open a terminal, run `claude`, type `/exit`, then click the refresh button (⟳) on the widget. This does not use any of your quota. Until then the widget keeps showing the last limits it fetched, with the time they are from; on a fresh install there is nothing to show until the first successful fetch.
+- **Codex: today's tokens or limits stop updating:** fixed in 0.1.1. Older versions skipped a Codex session that ran past midnight, because Windows does not refresh the last-write time of a log file that Codex keeps open. Update to the latest release.
+- **"Today" went back to a small number after midnight:** expected. "Tokens today" counts from your local midnight. The plan limits are separate and keep their own 5-hour and weekly windows.
 - **Claude: "network error":** the widget uses your system proxy settings. Make sure `api.anthropic.com` is reachable.
 - **Codex shows no limits:** use Codex once. Limits are only recorded when a request is made.
 

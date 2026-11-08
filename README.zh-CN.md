@@ -87,6 +87,9 @@ claude                                     # 选择 "Claude account with subscri
 
 - **悬浮窗没出现**：先看托盘（点 `^` 展开隐藏图标）。在终端运行 `powershell -ExecutionPolicy Bypass -STA -File "%LOCALAPPDATA%\Programs\TokenGauge\TokenGauge.ps1"` 可以看到报错，也可以查看 `%APPDATA%\TokenGauge\error.log`。
 - **Claude 提示"未找到登录信息"**：在 Claude Code 命令行版里登录一次，见上文。
+- **Claude 提示"登录令牌已过期"，额度条为空或数据不是最新**：Claude Code 命令行版的登录令牌只有几个小时有效期，运行 `claude` 时才会自动续期。打开终端运行 `claude`，输入 `/exit` 退出，再点悬浮窗右上角的刷新按钮（⟳）即可，这一步不消耗额度。续期之前，悬浮窗会继续显示最后一次获取到的额度并注明时间；刚安装、还没成功获取过一次的话，暂时没有数据可显示。
+- **Codex 的今日用量或额度不再更新**：已在 0.1.1 修复。旧版本会漏掉跨过午夜的 Codex 会话，因为 Codex 会一直占用日志文件，Windows 不会更新被占用文件的修改时间。请更新到最新版本。
+- **过了午夜，"今日 tokens"变回很小的数字**：属于正常现象。"今日 tokens"从本地时间 0 点开始计算；套餐额度不受影响，按各自的 5 小时和每周周期计算。
 - **Claude 提示"网络错误"**：悬浮窗使用系统代理设置，请确认能访问 `api.anthropic.com`。
 - **Codex 没有额度**：用一次 Codex。只有发出请求时才会记录额度。
 

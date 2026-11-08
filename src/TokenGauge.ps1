@@ -5,7 +5,7 @@
 
 $ErrorActionPreference = 'Stop'
 $AppName    = 'Token Gauge'
-$AppVersion = '0.1.0'
+$AppVersion = '0.1.1'
 $MainScript = $PSCommandPath
 $ScriptDir  = $PSScriptRoot
 
@@ -26,6 +26,7 @@ $AppDir = Join-Path $env:APPDATA 'TokenGauge'
 if (-not (Test-Path -LiteralPath $AppDir)) { New-Item -ItemType Directory -Path $AppDir | Out-Null }
 $SettingsPath = Join-Path $AppDir 'settings.json'
 $LogPath      = Join-Path $AppDir 'error.log'
+$QuotaCachePath = Join-Path $AppDir 'claude-quota.json'
 
 $ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE '.claude' }
 $CodexDir  = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
@@ -53,6 +54,7 @@ function Save-Settings {
 # ---------- strings (add a language: copy the 'en' block, translate, add it to $LangOrder) ----------
 $Strings = @{
     'en' = @{
+        AsOf = ' (limits shown are from {0})'
         Native = 'English'; Font = ''
         Header = 'TOKEN USAGE'; Today = 'tokens today'; H5 = '5-hour limit'; D7 = 'Weekly limit'
         ClaudeDetail = 'In {0} · Out {1} · Cache {2}'; CodexDetail = 'In {0} (cached {1}) · Out {2}'
@@ -75,6 +77,7 @@ $Strings = @{
         Tip5h = '{0} 5h: {1:0}% left'
     }
     'zh-CN' = @{
+        AsOf = '（显示的是 {0} 的额度数据）'
         Native = '简体中文'; Font = 'Microsoft YaHei UI'
         Header = 'TOKEN 用量'; Today = '今日 tokens'; H5 = '5 小时额度'; D7 = '每周额度'
         ClaudeDetail = '输入 {0} · 输出 {1} · 缓存 {2}'; CodexDetail = '输入 {0}（缓存 {1}）· 输出 {2}'
@@ -97,6 +100,7 @@ $Strings = @{
         Tip5h = '{0} 5h 剩余 {1:0}%'
     }
     'zh-TW' = @{
+        AsOf = '（顯示的是 {0} 的額度資料）'
         Native = '繁體中文'; Font = 'Microsoft JhengHei UI'
         Header = 'TOKEN 用量'; Today = '今日 tokens'; H5 = '5 小時額度'; D7 = '每週額度'
         ClaudeDetail = '輸入 {0} · 輸出 {1} · 快取 {2}'; CodexDetail = '輸入 {0}（快取 {1}）· 輸出 {2}'
@@ -119,6 +123,7 @@ $Strings = @{
         Tip5h = '{0} 5h 剩餘 {1:0}%'
     }
     'ja' = @{
+        AsOf = '（表示中の上限は {0} 時点のデータです）'
         Native = '日本語'; Font = 'Yu Gothic UI'
         Header = 'トークン使用量'; Today = '本日のトークン'; H5 = '5 時間の上限'; D7 = '週間の上限'
         ClaudeDetail = '入力 {0} · 出力 {1} · キャッシュ {2}'; CodexDetail = '入力 {0}（キャッシュ {1}）· 出力 {2}'
@@ -141,6 +146,7 @@ $Strings = @{
         Tip5h = '{0} 5h 残り {1:0}%'
     }
     'ko' = @{
+        AsOf = ' (표시된 한도는 {0} 기준)'
         Native = '한국어'; Font = 'Malgun Gothic'
         Header = '토큰 사용량'; Today = '오늘 토큰'; H5 = '5시간 한도'; D7 = '주간 한도'
         ClaudeDetail = '입력 {0} · 출력 {1} · 캐시 {2}'; CodexDetail = '입력 {0} (캐시 {1}) · 출력 {2}'
@@ -186,7 +192,7 @@ $S = @{
     Seen = New-Object 'System.Collections.Generic.HashSet[string]'
     Claude = @{ In = [long]0; Out = [long]0; CW = [long]0; CR = [long]0; Found = $false }
     Codex  = @{ In = [long]0; Cached = [long]0; Out = [long]0; Total = [long]0; Found = $false; RateTs = ''; H5 = $null; D7 = $null; Plan = '' }
-    CQ = @{ H5 = $null; D7 = $null; Plan = ''; Msg = 'Fetching' }   # Msg holds a key into $T
+    CQ = @{ H5 = $null; D7 = $null; Plan = ''; Msg = 'Fetching'; AsOf = $null }   # Msg holds a key into $T
     ClaudeDirs = $null; ClaudeDirsAt = $null
     Http = $null
     NextLocal = [DateTime]::MinValue
@@ -209,11 +215,13 @@ Reset-Day
 function Read-NewLines([string]$path) {
     $st = $S.Files[$path]
     if (-not $st) { $st = @{ Offset = [long]0 }; $S.Files[$path] = $st }
-    $len = (New-Object System.IO.FileInfo($path)).Length
-    if ($len -lt $st.Offset) { $st.Offset = [long]0 }
-    if ($len -eq $st.Offset) { return ,@() }
+    # take the length from the open stream: while another program keeps the file open, Windows can report a
+    # stale size and last-write time for it, so neither is trusted
     $fs = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
     try {
+        $len = $fs.Length
+        if ($len -lt $st.Offset) { $st.Offset = [long]0 }
+        if ($len -eq $st.Offset) { return ,@() }
         [void]$fs.Seek($st.Offset, [IO.SeekOrigin]::Begin)
         $count = [int]($len - $st.Offset)
         $buf = New-Object byte[] $count
@@ -281,7 +289,7 @@ function Update-Claude {
     if ($dirs.Count -eq 0) { return }
     $S.Claude.Found = $true
     foreach ($dir in $dirs) {
-        foreach ($f in (Get-JsonlFiles $dir $S.Day)) {
+        foreach ($f in (Get-JsonlFiles $dir $S.Day.AddDays(-2))) {
             try { $lines = Read-NewLines $f } catch { Log "read $f : $_"; continue }
             foreach ($line in $lines) {
                 if ($line.Length -lt 50) { continue }
@@ -315,6 +323,9 @@ function Convert-CodexWindow($w, [string]$ts) {
 }
 
 function Update-Codex {
+    # A Codex session can run across midnight and keeps its log open, and Windows may not update the
+    # last-write time of an open file. So read every session touched in the last 3 days and decide
+    # what counts as "today" from each entry's own timestamp.
     $files = New-Object System.Collections.Generic.List[string]
     $newest = $null; $newestT = [datetime]::MinValue
     foreach ($root in $CodexRoots) {
@@ -322,11 +333,11 @@ function Update-Codex {
         $S.Codex.Found = $true
         foreach ($f in (Get-JsonlFiles $root $S.Day.AddDays(-7))) {
             $t = [IO.File]::GetLastWriteTime($f)
-            if ($t -ge $S.Day) { $files.Add($f) }
+            if ($t -ge $S.Day.AddDays(-3)) { $files.Add($f) }
             if ($t -gt $newestT) { $newestT = $t; $newest = $f }
         }
     }
-    if ($newest -and -not $files.Contains($newest)) { $files.Add($newest) }   # newest file carries the latest rate limits
+    if ($files.Count -eq 0 -and $newest) { $files.Add($newest) }   # idle for days: still show the last known limits
     foreach ($f in $files) {
         $leaf = [IO.Path]::GetFileName($f)
         try { $lines = Read-NewLines $f } catch { Log "read $f : $_"; continue }
@@ -409,6 +420,27 @@ function Convert-ClaudeWindow($w) {
     return @{ Used = [double]$w.utilization; Reset = $reset }
 }
 
+# last successful Claude quota, so the bars survive a restart or an expired token
+function Save-QuotaCache {
+    try {
+        $o = @{ AsOf = $S.CQ.AsOf.ToString('o'); Plan = $S.CQ.Plan }
+        foreach ($k in 'H5','D7') { $w = $S.CQ[$k]; if ($w) { $o[$k] = @{ Used = $w.Used; Reset = $(if ($w.Reset) { $w.Reset.ToUnixTimeSeconds() } else { $null }) } } }
+        [IO.File]::WriteAllText($QuotaCachePath, ($o | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
+    } catch { Log "quota cache save: $_" }
+}
+function Load-QuotaCache {
+    try {
+        if (-not (Test-Path -LiteralPath $QuotaCachePath)) { return }
+        $o = [IO.File]::ReadAllText($QuotaCachePath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+        foreach ($k in 'H5','D7') {
+            $w = $o.$k
+            if ($w) { $S.CQ[$k] = @{ Used = [double]$w.Used; Reset = $(if ($w.Reset) { [DateTimeOffset]::FromUnixTimeSeconds([long]$w.Reset) } else { $null }) } }
+        }
+        if ($o.Plan) { $S.CQ.Plan = [string]$o.Plan }
+        if ($o.AsOf -is [datetime]) { $S.CQ.AsOf = $o.AsOf.ToLocalTime() } elseif ($o.AsOf) { $S.CQ.AsOf = [datetime]::Parse([string]$o.AsOf, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind).ToLocalTime() }
+    } catch { Log "quota cache load: $_" }
+}
+
 function Poll-ClaudeQuota {
     if (-not $S.Http -or -not $S.Http.H.IsCompleted) { return }
     $res = $null
@@ -421,6 +453,8 @@ function Poll-ClaudeQuota {
         $S.CQ.H5 = Convert-ClaudeWindow $res.data.five_hour
         $S.CQ.D7 = Convert-ClaudeWindow $res.data.seven_day
         $S.CQ.Msg = ''
+        $S.CQ.AsOf = Get-Date
+        Save-QuotaCache
         return
     }
     switch ($res.err) {
@@ -599,6 +633,7 @@ function Render {
     $cr5 = Set-Bar 'C_H5' $S.CQ.H5 $false
     $cr7 = Set-Bar 'C_D7' $S.CQ.D7 $true
     $cmsg = if ($S.CQ.Msg) { $T[$S.CQ.Msg] } else { '' }
+    if ($cmsg -and $S.CQ.Msg -ne 'Fetching' -and $S.CQ.AsOf -and ($S.CQ.H5 -or $S.CQ.D7)) { $cmsg += ($T.AsOf -f $S.CQ.AsOf.ToString('M/d HH:mm')) }
     if (-not $cmsg -and -not $c.Found) { $cmsg = $T.NoClaudeLogs }
     if ($cmsg) { $UI.C_Msg.Text = $cmsg; $UI.C_Msg.Visibility = 'Visible' } else { $UI.C_Msg.Visibility = 'Collapsed' }
 
@@ -785,6 +820,7 @@ $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromSeconds(1)
 $timer.Add_Tick({ try { Tick } catch { Log "tick: $($_.Exception.Message) @ $($_.InvocationInfo.ScriptLineNumber)" } })
 
+Load-QuotaCache
 $win.Show()
 try { Tick } catch { Log "first tick: $($_.Exception.Message) @ $($_.InvocationInfo.ScriptLineNumber)" }
 $timer.Start()

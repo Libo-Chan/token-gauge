@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 - 2026-11-08
+
+- Fixed: Codex usage could stop updating when a Codex session ran past midnight. Windows does not refresh the last-write time of a log file that Codex keeps open, so that session was skipped; the widget now reads every session from the last few days and counts entries by their own timestamps.
+- Claude plan limits now survive a restart or an expired login token: the last values are kept and shown with the time they are from.
+
 ## 0.1.0 - 2026-11-07
 
 First public version.
