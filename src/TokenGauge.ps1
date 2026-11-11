@@ -5,7 +5,7 @@
 
 $ErrorActionPreference = 'Stop'
 $AppName    = 'Token Gauge'
-$AppVersion = '0.2.1'
+$AppVersion = '0.3.0'
 $MainScript = $PSCommandPath
 $ScriptDir  = $PSScriptRoot
 
@@ -38,16 +38,20 @@ function Log($msg) {
     try { Add-Content -LiteralPath $LogPath -Value ("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg) -Encoding UTF8 } catch {}
 }
 
-$Cfg = @{ Left = $null; Top = $null; Topmost = $true; Language = 'auto'; Thresholds = @(20, 10); LocalRefreshSec = 15; QuotaRefreshSec = 120; EdgeDock = $true; Dock = $null }
+# Fixed behaviour, not settings: these defaults are right for everyone
+$Thresholds      = @(20, 10)   # notify when a limit drops to these % left
+$LocalRefreshSec = 15          # rescan local logs
+$QuotaRefreshSec = 120         # ask the Claude usage endpoint (be gentle with it)
+
+# Everything that is still a setting is switched from the tray menu; nobody needs to edit settings.json
+$Cfg = @{ Left = $null; Top = $null; Topmost = $true; Language = 'auto'; EdgeDock = $true; Dock = $null }
 if (Test-Path -LiteralPath $SettingsPath) {
     try {
         $j = [IO.File]::ReadAllText($SettingsPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
-        foreach ($p in $j.PSObject.Properties) { $Cfg[$p.Name] = $p.Value }
+        foreach ($p in $j.PSObject.Properties) { if ($Cfg.ContainsKey($p.Name)) { $Cfg[$p.Name] = $p.Value } }   # drops keys from older versions
     } catch { Log "settings: $_" }
 }
-if ([double]$Cfg.LocalRefreshSec -lt 5) { $Cfg.LocalRefreshSec = 5 }
 if ($Cfg.Dock) { $d0 = $Cfg.Dock; $Cfg.Dock = @{ Edge = [string]$d0.Edge; Pos = [int]$d0.Pos; Screen = [string]$d0.Screen; Pinned = [bool]$d0.Pinned } }
-if ([double]$Cfg.QuotaRefreshSec -lt 60) { $Cfg.QuotaRefreshSec = 60 }   # be gentle with the quota endpoint
 function Save-Settings {
     try { [IO.File]::WriteAllText($SettingsPath, ($Cfg | ConvertTo-Json), (New-Object Text.UTF8Encoding($false))) } catch { Log "save: $_" }
 }
@@ -55,122 +59,162 @@ function Save-Settings {
 # ---------- strings (add a language: copy the 'en' block, translate, add it to $LangOrder) ----------
 $Strings = @{
     'en' = @{
-        TipKeep = 'Keep shown (do not auto-hide at the screen edge)'; MenuEdge = 'Auto-hide at screen edge'; MarkerTip = 'Click to show Token Gauge'
-        AsOf = ' (limits shown are from {0})'
-        Native = 'English'; Font = ''
-        Header = 'TOKEN USAGE'; Today = 'tokens today'; H5 = '5-hour limit'; D7 = 'Weekly limit'
         ClaudeDetail = 'In {0} · Out {1} · Cache {2}'; CodexDetail = 'In {0} (cached {1}) · Out {2}'
-        Remaining = '{0:0}% left'; Used = '{0:0}% used'; NoData = 'No data yet'; WindowReset = 'Window has reset, waiting for new data'; NotStarted = '{0:0}% used (window not started)'
-        ResetIn = 'resets in {0} · {1}'; DaysHours = '{0}d {1}h'; ResetNow = 'resetting now'
-        Footer = 'Updated {0} · refreshes every {1}s · drag to move'
-        Fetching = 'Fetching quota…'
-        NoCred = 'Claude Code login not found. Install the Claude Code CLI, run claude once and sign in with your subscription.'
-        Expired = 'Login token expired. Run claude once in a terminal to renew it.'
-        Invalid = 'Login token rejected. Run claude and sign in again.'
-        TooMany = 'Quota endpoint rate-limited, retrying later.'
-        NetErr = 'Could not reach the quota endpoint, retrying later.'
-        NoClaudeLogs = 'No local Claude Code sessions on this PC (cloud sessions leave no local logs).'
+        Native = 'English'; Font = ''
+        Today = '{0} tokens today'
+        H5 = '5-hour limit'; D7 = 'Weekly limit'; H5P = '5-hour limit'; D7P = 'weekly limit'; H5Short = '5-hour'; D7Short = 'Weekly'
+        HeroLbl = '{0} left'; SecFmt = '{0}: {1:0}% left · {2}'
+        ResetIn = 'resets in {0}'; ResetAt = 'Resets {0}'; ResetNow = 'resetting now'
+        Min = '{0} min'; HrMin = '{0}h {1}m'; DaysHours = '{0}d {1}h'
+        NoData = 'No data yet'; WindowReset = 'Reset, waiting for new data'; NotStarted = 'Window not started yet'
+        PaceOk = "At this pace you'll make it to the reset"
+        PaceOut = '{0} runs out in ~{1}, ~{2} before it resets'
+        PaceOutSelf = 'Runs out in ~{0}, ~{1} before it resets'
+        PaceEmpty = '{0} used up'
+        AsOf = 'Data from {0}'; ApproxMin = '{0} min'; ApproxHr = '{0}h'; ApproxDay = '{0}d'
+        Fetching = 'Fetching limits…'
+        NoCred = 'Sign in to the Claude Code CLI once to see your Claude limits.'
+        Expired = 'Login expired. Renewing it automatically; if it does not come back, sign in again.'
+        Invalid = 'Login is no longer valid. Please sign in again.'
+        Connect = 'Connect Claude account'; Relogin = 'Sign in to Claude again'
+        ConnectTip = 'Opens a terminal and runs claude auth login (installs the Claude Code CLI with the official script first if it is missing)'
+        ConsoleDone = 'Done. You can close this window.'
+        TooMany = 'Limit endpoint rate-limited, retrying later.'
+        NetErr = 'Could not reach the limit endpoint, retrying later.'
         NoCodexDir = 'Codex sessions folder not found: {0}'
-        NoCodexRecent = 'No Codex activity in the last 7 days. Use Codex once to see the quota.'
+        NoCodexRecent = 'No Codex activity in the last 7 days. Use Codex once to see the limits.'
         AlertTitle = '{0} running low'; AlertBody = 'Only {0:0}% left'
-        TipRefresh = 'Refresh now'; TipPin = 'Always on top'; TipHide = 'Hide to tray (double-click the tray icon to restore)'
-        MenuShow = 'Show / hide'; MenuRefresh = 'Refresh now'; MenuTop = 'Always on top'; MenuAuto = 'Start with Windows'; MenuFolder = 'Open settings folder'; MenuExit = 'Exit'
+        TipPin = 'Always on top'; TipHide = 'Hide to tray (double-click the tray icon to restore)'
+        TipKeep = 'Keep shown (do not auto-hide at the screen edge)'; MarkerTip = 'Click to show Token Gauge'
+        MenuShow = 'Show / hide'; MenuRefresh = 'Refresh now'; MenuTop = 'Always on top'; MenuAuto = 'Start with Windows'; MenuEdge = 'Auto-hide at screen edge'; MenuFolder = 'Open log folder'; MenuExit = 'Exit'
         MenuLang = 'Language'; LangAuto = 'Follow system'
         Tip5h = '{0} 5h: {1:0}% left'
     }
     'zh-CN' = @{
-        TipKeep = '长期显示（贴边时不自动隐藏）'; MenuEdge = '贴边自动隐藏'; MarkerTip = '点击显示 Token Gauge'
-        AsOf = '（显示的是 {0} 的额度数据）'
-        Native = '简体中文'; Font = 'Microsoft YaHei UI'
-        Header = 'TOKEN 用量'; Today = '今日 tokens'; H5 = '5 小时额度'; D7 = '每周额度'
         ClaudeDetail = '输入 {0} · 输出 {1} · 缓存 {2}'; CodexDetail = '输入 {0}（缓存 {1}）· 输出 {2}'
-        Remaining = '剩余 {0:0}%'; Used = '已用 {0:0}%'; NoData = '暂无数据'; WindowReset = '窗口已重置，等待新数据'; NotStarted = '已用 {0:0}%（窗口尚未开始计时）'
-        ResetIn = '{0} 后重置 · {1}'; DaysHours = '{0} 天 {1} 小时'; ResetNow = '即将重置'
-        Footer = '更新于 {0} · 每 {1} 秒刷新 · 可拖动'
+        Native = '简体中文'; Font = 'Microsoft YaHei UI'
+        Today = '今日 {0} tokens'
+        H5 = '5 小时额度'; D7 = '每周额度'; H5P = '5 小时额度'; D7P = '每周额度'; H5Short = '5 小时'; D7Short = '本周'
+        HeroLbl = '{0}剩余'; SecFmt = '{0}剩余 {1:0}% · {2}'
+        ResetIn = '{0}后重置'; ResetAt = '重置时间 {0}'; ResetNow = '即将重置'
+        Min = '{0} 分钟'; HrMin = '{0} 小时 {1} 分'; DaysHours = '{0} 天 {1} 小时'
+        NoData = '暂无数据'; WindowReset = '已重置，等待新数据'; NotStarted = '尚未开始计时'
+        PaceOk = '按当前速度，能撑到重置'
+        PaceOut = '{0}约 {1}后用完，比重置早约 {2}'
+        PaceOutSelf = '约 {0}后用完，比重置早约 {1}'
+        PaceEmpty = '{0}已用完'
+        AsOf = '数据来自 {0}'; ApproxMin = '{0} 分钟'; ApproxHr = '{0} 小时'; ApproxDay = '{0} 天'
         Fetching = '正在获取额度…'
-        NoCred = '未找到 Claude Code 登录信息。安装 Claude Code 命令行版，运行一次 claude 并用订阅账号登录即可。'
-        Expired = '登录令牌已过期。在终端运行一次 claude，令牌会自动续期。'
-        Invalid = '登录令牌无效，请运行 claude 重新登录。'
+        NoCred = '登录一次 Claude Code 命令行，就能显示 Claude 额度。'
+        Expired = '登录已过期，正在自动续期；一直不恢复的话请重新登录。'
+        Invalid = '登录已失效，请重新登录。'
+        Connect = '连接 Claude 账号'; Relogin = '重新登录 Claude'
+        ConnectTip = '打开终端运行 claude auth login（没装 Claude Code 命令行时，先用官方脚本安装）'
+        ConsoleDone = '完成，可以关闭这个窗口了。'
         TooMany = '额度查询过于频繁，稍后自动重试。'
         NetErr = '额度获取失败（网络），稍后自动重试。'
-        NoClaudeLogs = '本机没有 Claude Code 本地会话记录（云端会话不会在本机留下记录）。'
         NoCodexDir = '未找到 Codex 会话目录：{0}'
         NoCodexRecent = '最近 7 天没有 Codex 使用记录，用一次 Codex 后显示额度。'
-        AlertTitle = '{0} 不足'; AlertBody = '仅剩 {0:0}%'
-        TipRefresh = '立即刷新'; TipPin = '窗口置顶'; TipHide = '隐藏到托盘（双击托盘图标恢复）'
-        MenuShow = '显示 / 隐藏'; MenuRefresh = '立即刷新'; MenuTop = '窗口置顶'; MenuAuto = '开机自动启动'; MenuFolder = '打开设置文件夹'; MenuExit = '退出'
+        AlertTitle = '{0}不足'; AlertBody = '仅剩 {0:0}%'
+        TipPin = '窗口置顶'; TipHide = '隐藏到托盘（双击托盘图标恢复）'
+        TipKeep = '长期显示（贴边时不自动隐藏）'; MarkerTip = '点击显示 Token Gauge'
+        MenuShow = '显示 / 隐藏'; MenuRefresh = '立即刷新'; MenuTop = '窗口置顶'; MenuAuto = '开机自动启动'; MenuEdge = '贴边自动隐藏'; MenuFolder = '打开日志文件夹'; MenuExit = '退出'
         MenuLang = '语言'; LangAuto = '跟随系统'
         Tip5h = '{0} 5h 剩余 {1:0}%'
     }
     'zh-TW' = @{
-        TipKeep = '長期顯示（貼邊時不自動隱藏）'; MenuEdge = '貼邊自動隱藏'; MarkerTip = '按一下以顯示 Token Gauge'
-        AsOf = '（顯示的是 {0} 的額度資料）'
-        Native = '繁體中文'; Font = 'Microsoft JhengHei UI'
-        Header = 'TOKEN 用量'; Today = '今日 tokens'; H5 = '5 小時額度'; D7 = '每週額度'
         ClaudeDetail = '輸入 {0} · 輸出 {1} · 快取 {2}'; CodexDetail = '輸入 {0}（快取 {1}）· 輸出 {2}'
-        Remaining = '剩餘 {0:0}%'; Used = '已用 {0:0}%'; NoData = '暫無資料'; WindowReset = '額度週期已重置，等待新資料'; NotStarted = '已用 {0:0}%（週期尚未開始計時）'
-        ResetIn = '{0} 後重置 · {1}'; DaysHours = '{0} 天 {1} 小時'; ResetNow = '即將重置'
-        Footer = '更新於 {0} · 每 {1} 秒重新整理 · 可拖曳'
+        Native = '繁體中文'; Font = 'Microsoft JhengHei UI'
+        Today = '今日 {0} tokens'
+        H5 = '5 小時額度'; D7 = '每週額度'; H5P = '5 小時額度'; D7P = '每週額度'; H5Short = '5 小時'; D7Short = '本週'
+        HeroLbl = '{0}剩餘'; SecFmt = '{0}剩餘 {1:0}% · {2}'
+        ResetIn = '{0}後重置'; ResetAt = '重置時間 {0}'; ResetNow = '即將重置'
+        Min = '{0} 分鐘'; HrMin = '{0} 小時 {1} 分'; DaysHours = '{0} 天 {1} 小時'
+        NoData = '暫無資料'; WindowReset = '已重置，等待新資料'; NotStarted = '尚未開始計時'
+        PaceOk = '照目前速度，可以撐到重置'
+        PaceOut = '{0}約 {1}後用完，比重置早約 {2}'
+        PaceOutSelf = '約 {0}後用完，比重置早約 {1}'
+        PaceEmpty = '{0}已用完'
+        AsOf = '資料來自 {0}'; ApproxMin = '{0} 分鐘'; ApproxHr = '{0} 小時'; ApproxDay = '{0} 天'
         Fetching = '正在取得額度…'
-        NoCred = '找不到 Claude Code 登入資訊。請安裝 Claude Code 命令列版，執行一次 claude 並以訂閱帳號登入。'
-        Expired = '登入權杖已過期。在終端機執行一次 claude 即可自動續期。'
-        Invalid = '登入權杖無效，請執行 claude 重新登入。'
+        NoCred = '登入一次 Claude Code 命令列版，就能顯示 Claude 額度。'
+        Expired = '登入已過期，正在自動續期；若一直未恢復，請重新登入。'
+        Invalid = '登入已失效，請重新登入。'
+        Connect = '連結 Claude 帳號'; Relogin = '重新登入 Claude'
+        ConnectTip = '開啟終端機執行 claude auth login（未安裝 Claude Code 命令列版時，先用官方指令碼安裝）'
+        ConsoleDone = '完成，可以關閉這個視窗了。'
         TooMany = '額度查詢過於頻繁，稍後自動重試。'
         NetErr = '無法取得額度（網路問題），稍後自動重試。'
-        NoClaudeLogs = '這台電腦上沒有 Claude Code 本機工作階段紀錄（雲端工作階段不會在本機留下紀錄）。'
         NoCodexDir = '找不到 Codex 工作階段資料夾：{0}'
         NoCodexRecent = '最近 7 天沒有 Codex 使用紀錄，使用一次 Codex 後即會顯示額度。'
-        AlertTitle = '{0} 即將用完'; AlertBody = '僅剩 {0:0}%'
-        TipRefresh = '立即重新整理'; TipPin = '視窗置頂'; TipHide = '隱藏到系統匣（按兩下系統匣圖示即可還原）'
-        MenuShow = '顯示 / 隱藏'; MenuRefresh = '立即重新整理'; MenuTop = '視窗置頂'; MenuAuto = '開機時自動啟動'; MenuFolder = '開啟設定資料夾'; MenuExit = '結束'
+        AlertTitle = '{0}即將用完'; AlertBody = '僅剩 {0:0}%'
+        TipPin = '視窗置頂'; TipHide = '隱藏到系統匣（按兩下系統匣圖示即可還原）'
+        TipKeep = '長期顯示（貼邊時不自動隱藏）'; MarkerTip = '按一下以顯示 Token Gauge'
+        MenuShow = '顯示 / 隱藏'; MenuRefresh = '立即重新整理'; MenuTop = '視窗置頂'; MenuAuto = '開機時自動啟動'; MenuEdge = '貼邊自動隱藏'; MenuFolder = '開啟記錄資料夾'; MenuExit = '結束'
         MenuLang = '語言'; LangAuto = '跟隨系統'
         Tip5h = '{0} 5h 剩餘 {1:0}%'
     }
     'ja' = @{
-        TipKeep = '常に表示（画面の端で自動的に隠さない）'; MenuEdge = '画面の端で自動的に隠す'; MarkerTip = 'クリックして Token Gauge を表示'
-        AsOf = '（表示中の上限は {0} 時点のデータです）'
-        Native = '日本語'; Font = 'Yu Gothic UI'
-        Header = 'トークン使用量'; Today = '本日のトークン'; H5 = '5 時間の上限'; D7 = '週間の上限'
         ClaudeDetail = '入力 {0} · 出力 {1} · キャッシュ {2}'; CodexDetail = '入力 {0}（キャッシュ {1}）· 出力 {2}'
-        Remaining = '残り {0:0}%'; Used = '{0:0}% 使用'; NoData = 'データなし'; WindowReset = 'リセット済み。新しいデータを待っています'; NotStarted = '{0:0}% 使用（期間未開始）'
-        ResetIn = 'あと {0} でリセット · {1}'; DaysHours = '{0} 日 {1} 時間'; ResetNow = 'まもなくリセット'
-        Footer = '更新 {0} · {1} 秒ごとに更新 · ドラッグで移動'
+        Native = '日本語'; Font = 'Yu Gothic UI'
+        Today = '本日 {0} トークン'
+        H5 = '5 時間の上限'; D7 = '週間の上限'; H5P = '5 時間の上限'; D7P = '週間の上限'; H5Short = '5 時間'; D7Short = '今週'
+        HeroLbl = '{0} 残り'; SecFmt = '{0} 残り {1:0}% · {2}'
+        ResetIn = 'あと {0} でリセット'; ResetAt = 'リセット {0}'; ResetNow = 'まもなくリセット'
+        Min = '{0} 分'; HrMin = '{0} 時間 {1} 分'; DaysHours = '{0} 日 {1} 時間'
+        NoData = 'データなし'; WindowReset = 'リセット済み。新しいデータを待っています'; NotStarted = '期間はまだ始まっていません'
+        PaceOk = 'このペースならリセットまで持ちます'
+        PaceOut = '{0}は約 {1}で使い切り（リセットの約 {2}前）'
+        PaceOutSelf = '約 {0}で使い切り（リセットの約 {1}前）'
+        PaceEmpty = '{0}を使い切りました'
+        AsOf = '{0} 時点のデータ'; ApproxMin = '{0} 分'; ApproxHr = '{0} 時間'; ApproxDay = '{0} 日'
         Fetching = '上限を取得中…'
-        NoCred = 'Claude Code のログイン情報が見つかりません。Claude Code CLI をインストールし、claude を一度実行してサブスクリプションでログインしてください。'
-        Expired = 'ログイントークンの有効期限が切れています。ターミナルで claude を一度実行すると更新されます。'
-        Invalid = 'ログイントークンが無効です。claude を実行して再ログインしてください。'
+        NoCred = 'Claude Code CLI に一度ログインすると、Claude の上限が表示されます。'
+        Expired = 'ログインの有効期限が切れました。自動で更新中です。戻らない場合は再ログインしてください。'
+        Invalid = 'ログインが無効になりました。再ログインしてください。'
+        Connect = 'Claude アカウントを接続'; Relogin = 'Claude に再ログイン'
+        ConnectTip = 'ターミナルで claude auth login を実行します（Claude Code CLI がない場合は、公式スクリプトで先にインストール）'
+        ConsoleDone = '完了しました。このウィンドウは閉じてかまいません。'
         TooMany = '問い合わせが多すぎます。しばらくして自動で再試行します。'
         NetErr = '上限を取得できませんでした（ネットワーク）。しばらくして自動で再試行します。'
-        NoClaudeLogs = 'この PC に Claude Code のローカルセッションはありません（クラウドセッションはローカルに記録されません）。'
         NoCodexDir = 'Codex のセッションフォルダーが見つかりません: {0}'
         NoCodexRecent = '過去 7 日間 Codex の使用履歴がありません。一度 Codex を使うと上限が表示されます。'
-        AlertTitle = '{0} が残りわずか'; AlertBody = '残り {0:0}%'
-        TipRefresh = '今すぐ更新'; TipPin = '常に手前に表示'; TipHide = 'トレイに隠す（トレイアイコンをダブルクリックで再表示）'
-        MenuShow = '表示 / 非表示'; MenuRefresh = '今すぐ更新'; MenuTop = '常に手前に表示'; MenuAuto = 'Windows 起動時に開始'; MenuFolder = '設定フォルダーを開く'; MenuExit = '終了'
+        AlertTitle = '{0}が残りわずか'; AlertBody = '残り {0:0}%'
+        TipPin = '常に手前に表示'; TipHide = 'トレイに隠す（トレイアイコンをダブルクリックで再表示）'
+        TipKeep = '常に表示（画面の端で自動的に隠さない）'; MarkerTip = 'クリックして Token Gauge を表示'
+        MenuShow = '表示 / 非表示'; MenuRefresh = '今すぐ更新'; MenuTop = '常に手前に表示'; MenuAuto = 'Windows 起動時に開始'; MenuEdge = '画面の端で自動的に隠す'; MenuFolder = 'ログフォルダーを開く'; MenuExit = '終了'
         MenuLang = '言語'; LangAuto = 'システムに合わせる'
         Tip5h = '{0} 5h 残り {1:0}%'
     }
     'ko' = @{
-        TipKeep = '항상 표시 (화면 가장자리에서 자동으로 숨기지 않음)'; MenuEdge = '화면 가장자리에서 자동 숨기기'; MarkerTip = '클릭하여 Token Gauge 표시'
-        AsOf = ' (표시된 한도는 {0} 기준)'
-        Native = '한국어'; Font = 'Malgun Gothic'
-        Header = '토큰 사용량'; Today = '오늘 토큰'; H5 = '5시간 한도'; D7 = '주간 한도'
         ClaudeDetail = '입력 {0} · 출력 {1} · 캐시 {2}'; CodexDetail = '입력 {0} (캐시 {1}) · 출력 {2}'
-        Remaining = '{0:0}% 남음'; Used = '{0:0}% 사용'; NoData = '데이터 없음'; WindowReset = '한도가 초기화됨, 새 데이터 대기 중'; NotStarted = '{0:0}% 사용 (기간 시작 전)'
-        ResetIn = '{0} 후 초기화 · {1}'; DaysHours = '{0}일 {1}시간'; ResetNow = '곧 초기화'
-        Footer = '{0} 업데이트 · {1}초마다 새로 고침 · 드래그하여 이동'
+        Native = '한국어'; Font = 'Malgun Gothic'
+        Today = '오늘 {0} 토큰'
+        H5 = '5시간 한도'; D7 = '주간 한도'; H5P = '5시간 한도'; D7P = '주간 한도'; H5Short = '5시간'; D7Short = '이번 주'
+        HeroLbl = '{0} 남음'; SecFmt = '{0} {1:0}% 남음 · {2}'
+        ResetIn = '{0} 후 초기화'; ResetAt = '초기화 시각 {0}'; ResetNow = '곧 초기화'
+        Min = '{0}분'; HrMin = '{0}시간 {1}분'; DaysHours = '{0}일 {1}시간'
+        NoData = '데이터 없음'; WindowReset = '초기화됨, 새 데이터 대기 중'; NotStarted = '아직 기간이 시작되지 않음'
+        PaceOk = '이 속도라면 초기화까지 충분합니다'
+        PaceOut = '{0}는 약 {1} 후 소진 (초기화 약 {2} 전)'
+        PaceOutSelf = '약 {0} 후 소진 (초기화 약 {1} 전)'
+        PaceEmpty = '{0} 소진'
+        AsOf = '{0} 기준 데이터'; ApproxMin = '{0}분'; ApproxHr = '{0}시간'; ApproxDay = '{0}일'
         Fetching = '한도 가져오는 중…'
-        NoCred = 'Claude Code 로그인 정보를 찾을 수 없습니다. Claude Code CLI를 설치하고 claude를 한 번 실행해 구독 계정으로 로그인하세요.'
-        Expired = '로그인 토큰이 만료되었습니다. 터미널에서 claude를 한 번 실행하면 갱신됩니다.'
-        Invalid = '로그인 토큰이 유효하지 않습니다. claude를 실행해 다시 로그인하세요.'
+        NoCred = 'Claude Code CLI에 한 번 로그인하면 Claude 한도가 표시됩니다.'
+        Expired = '로그인이 만료되었습니다. 자동으로 갱신 중이며, 계속 안 되면 다시 로그인하세요.'
+        Invalid = '로그인이 더 이상 유효하지 않습니다. 다시 로그인하세요.'
+        Connect = 'Claude 계정 연결'; Relogin = 'Claude 다시 로그인'
+        ConnectTip = '터미널에서 claude auth login을 실행합니다(Claude Code CLI가 없으면 공식 스크립트로 먼저 설치)'
+        ConsoleDone = '완료되었습니다. 이 창은 닫아도 됩니다.'
         TooMany = '요청이 너무 많습니다. 잠시 후 자동으로 다시 시도합니다.'
         NetErr = '한도를 가져오지 못했습니다(네트워크). 잠시 후 자동으로 다시 시도합니다.'
-        NoClaudeLogs = '이 PC에 Claude Code 로컬 세션이 없습니다(클라우드 세션은 로컬에 기록되지 않음).'
         NoCodexDir = 'Codex 세션 폴더를 찾을 수 없습니다: {0}'
         NoCodexRecent = '최근 7일간 Codex 사용 기록이 없습니다. Codex를 한 번 사용하면 한도가 표시됩니다.'
         AlertTitle = '{0} 부족'; AlertBody = '{0:0}%만 남음'
-        TipRefresh = '지금 새로 고침'; TipPin = '항상 위에 표시'; TipHide = '트레이로 숨기기(트레이 아이콘을 두 번 클릭하면 복원)'
-        MenuShow = '표시 / 숨기기'; MenuRefresh = '지금 새로 고침'; MenuTop = '항상 위에 표시'; MenuAuto = 'Windows 시작 시 실행'; MenuFolder = '설정 폴더 열기'; MenuExit = '종료'
+        TipPin = '항상 위에 표시'; TipHide = '트레이로 숨기기(트레이 아이콘을 두 번 클릭하면 복원)'
+        TipKeep = '항상 표시 (화면 가장자리에서 자동으로 숨기지 않음)'; MarkerTip = '클릭하여 Token Gauge 표시'
+        MenuShow = '표시 / 숨기기'; MenuRefresh = '지금 새로 고침'; MenuTop = '항상 위에 표시'; MenuAuto = 'Windows 시작 시 실행'; MenuEdge = '화면 가장자리에서 자동 숨기기'; MenuFolder = '로그 폴더 열기'; MenuExit = '종료'
         MenuLang = '언어'; LangAuto = '시스템 설정 따르기'
         Tip5h = '{0} 5h {1:0}% 남음'
     }
@@ -201,6 +245,7 @@ $S = @{
     CQ = @{ H5 = $null; D7 = $null; Plan = ''; Msg = 'Fetching'; AsOf = $null }   # Msg holds a key into $T
     ClaudeDirs = $null; ClaudeDirsAt = $null
     CliAt = $null
+    CredStamp = $null
     Http = $null
     NextLocal = [DateTime]::MinValue
     NextQuota = [DateTime]::MinValue
@@ -326,7 +371,8 @@ function Convert-CodexWindow($w, [string]$ts) {
     $reset = $null
     if ($w.resets_at) { $reset = [DateTimeOffset]::FromUnixTimeSeconds([long]$w.resets_at) }
     elseif ($w.resets_in_seconds) { $reset = [DateTimeOffset]::Parse($ts, [Globalization.CultureInfo]::InvariantCulture).AddSeconds([double]$w.resets_in_seconds) }
-    return @{ Used = [double]$w.used_percent; Reset = $reset }
+    $len = if ($w.window_minutes) { [double]$w.window_minutes } else { $null }
+    return @{ Used = [double]$w.used_percent; Reset = $reset; Len = $len }
 }
 
 function Update-Codex {
@@ -466,6 +512,7 @@ function Convert-ClaudeWindow($w) {
     }
     return @{ Used = [double]$w.utilization; Reset = $reset }
 }
+$ClaudeLen = @{ H5 = 300.0; D7 = 10080.0 }   # Claude does not report its window lengths: 5 hours and 7 days
 
 # last successful Claude quota, so the bars survive a restart or an expired token
 function Save-QuotaCache {
@@ -530,32 +577,34 @@ $SectionXaml = @'
       <TextBlock x:Name="P_Plan" Text="—" FontSize="10" Foreground="#B3FFFFFF"/>
     </Border>
   </Grid>
-  <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-    <TextBlock x:Name="P_Today" Text="0" FontSize="26" FontWeight="SemiBold" Foreground="White"/>
-    <TextBlock x:Name="P_TodayLbl" Text=" " Style="{StaticResource Small}" VerticalAlignment="Bottom" Margin="7,0,0,6"/>
+  <Grid Margin="0,2,0,0">
+    <TextBlock x:Name="P_Hero" Text="—" FontSize="32" FontWeight="SemiBold" Foreground="#80FFFFFF" VerticalAlignment="Center"/>
+    <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center">
+      <TextBlock x:Name="P_HeroLbl" Style="{StaticResource Small}" Foreground="#CCFFFFFF" HorizontalAlignment="Right" Text=" "/>
+      <TextBlock x:Name="P_HeroReset" Style="{StaticResource Small}" HorizontalAlignment="Right" Text=" " Margin="0,2,0,0"/>
+    </StackPanel>
+  </Grid>
+  <Grid x:Name="P_Bar" Height="6" Margin="0,4,0,0">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="0*"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
+    <Border Grid.ColumnSpan="2" CornerRadius="3" Background="#1FFFFFFF"/>
+    <Border x:Name="P_Fill" Grid.Column="0" CornerRadius="3" Background="#FF34C759"/>
+  </Grid>
+  <TextBlock x:Name="P_Pace" FontSize="11" TextWrapping="Wrap" Margin="0,7,0,0" Visibility="Collapsed"/>
+  <StackPanel x:Name="P_SecBox" Margin="0,9,0,0">
+    <TextBlock x:Name="P_Sec" Style="{StaticResource Small}" TextWrapping="Wrap" Text=" "/>
+    <Grid x:Name="P_Bar2" Height="3" Margin="0,4,0,0">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="0*"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
+      <Border Grid.ColumnSpan="2" CornerRadius="1.5" Background="#1FFFFFFF"/>
+      <Border x:Name="P_Fill2" Grid.Column="0" CornerRadius="1.5" Background="#FF34C759"/>
+    </Grid>
   </StackPanel>
-  <TextBlock x:Name="P_Detail" Style="{StaticResource Small}" TextWrapping="Wrap" Text=" "/>
-  BAR_P_H5
-  BAR_P_D7
-  <TextBlock x:Name="P_Msg" FontSize="11" Foreground="#FFFFB340" TextWrapping="Wrap" Visibility="Collapsed" Margin="0,8,0,0"/>
+  <TextBlock x:Name="P_Today" Style="{StaticResource Small}" Foreground="#66FFFFFF" Margin="0,8,0,0" Visibility="Collapsed"/>
+  <TextBlock x:Name="P_Msg" FontSize="11" Foreground="#8CFFFFFF" TextWrapping="Wrap" Visibility="Collapsed" Margin="0,8,0,0"/>
+  <Button x:Name="P_Connect" Style="{StaticResource PillBtn}" HorizontalAlignment="Left" Margin="0,8,0,0" Visibility="Collapsed"/>
 </StackPanel>
 '@
-$BarXaml = @'
-<Grid Margin="0,10,0,0">
-  <TextBlock x:Name="N_Lbl" Text=" " Style="{StaticResource Small}"/>
-  <TextBlock x:Name="N_Pct" HorizontalAlignment="Right" FontSize="11" FontWeight="SemiBold" Foreground="White" Text="—"/>
-</Grid>
-<Grid x:Name="N_Bar" Height="6" Margin="0,5,0,0">
-  <Grid.ColumnDefinitions><ColumnDefinition Width="0*"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
-  <Border Grid.ColumnSpan="2" CornerRadius="3" Background="#1FFFFFFF"/>
-  <Border x:Name="N_Fill" Grid.Column="0" CornerRadius="3" Background="#FF34C759"/>
-</Grid>
-<TextBlock x:Name="N_Reset" Style="{StaticResource Small}" TextWrapping="Wrap" Margin="0,4,0,0" Text=" "/>
-'@
 function New-Section($prefix, $title, $accent) {
-    $x = $SectionXaml.Replace('BAR_P_H5', $BarXaml.Replace('N_', "${prefix}_H5_"))
-    $x = $x.Replace('BAR_P_D7', $BarXaml.Replace('N_', "${prefix}_D7_"))
-    return $x.Replace('P_', "${prefix}_").Replace('TITLE', $title).Replace('ACCENT', $accent)
+    return $SectionXaml.Replace('P_', "${prefix}_").Replace('TITLE', $title).Replace('ACCENT', $accent)
 }
 
 $WindowXaml = @'
@@ -593,14 +642,33 @@ $WindowXaml = @'
         </Setter.Value>
       </Setter>
     </Style>
+    <Style x:Key="PillBtn" TargetType="Button">
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Focusable" Value="False"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="b" Background="#FFE0875F" CornerRadius="7" Padding="12,5,12,6">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="b" Property="Background" Value="#FFEC9A75"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
   </Window.Resources>
-  <Border x:Name="Root" Margin="12" CornerRadius="14" Background="#F51B1D22" BorderBrush="#22FFFFFF" BorderThickness="1" Padding="16,10,16,14">
+  <Border x:Name="Root" Margin="12" CornerRadius="14" Background="#F51B1D22" BorderBrush="#22FFFFFF" BorderThickness="1" Padding="16,10,16,16">
     <Border.Effect><DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.4"/></Border.Effect>
     <StackPanel>
       <Grid>
-        <TextBlock x:Name="HeaderText" Text=" " FontSize="11" FontWeight="SemiBold" Foreground="#73FFFFFF" VerticalAlignment="Center"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-          <Button x:Name="BtnRefresh" Style="{StaticResource IconBtn}" Content="&#xE72C;"/>
           <Button x:Name="BtnKeep" Style="{StaticResource IconBtn}" Content="&#xE890;" Visibility="Collapsed"/>
           <Button x:Name="BtnPin" Style="{StaticResource IconBtn}" Content="&#xE718;"/>
           <Button x:Name="BtnHide" Style="{StaticResource IconBtn}" Content="&#xE921;"/>
@@ -609,7 +677,6 @@ $WindowXaml = @'
       SECTION_CLAUDE
       <Border Height="1" Background="#14FFFFFF" Margin="0,14,0,0"/>
       SECTION_CODEX
-      <TextBlock x:Name="Footer" Style="{StaticResource Small}" FontSize="10" TextWrapping="Wrap" Foreground="#59FFFFFF" Margin="0,12,0,0" Text=" "/>
     </StackPanel>
   </Border>
 </Window>
@@ -620,14 +687,13 @@ $app.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown
 $win = [Windows.Markup.XamlReader]::Parse($WindowXaml)
 
 $UI = @{}
-foreach ($n in 'Root','BtnRefresh','BtnKeep','BtnPin','BtnHide','Footer','HeaderText') { $UI[$n] = $win.FindName($n) }
+foreach ($n in 'Root','BtnKeep','BtnPin','BtnHide') { $UI[$n] = $win.FindName($n) }
 foreach ($p in 'C','X') {
-    foreach ($n in 'Plan','Today','TodayLbl','Detail','Msg') { $UI["${p}_$n"] = $win.FindName("${p}_$n") }
-    foreach ($b in 'H5','D7') { foreach ($n in 'Pct','Bar','Fill','Reset','Lbl') { $UI["${p}_${b}_$n"] = $win.FindName("${p}_${b}_$n") } }
+    foreach ($n in 'Plan','Hero','HeroLbl','HeroReset','Bar','Fill','Pace','SecBox','Sec','Bar2','Fill2','Today','Msg','Connect') { $UI["${p}_$n"] = $win.FindName("${p}_$n") }
 }
 
 $BC = New-Object System.Windows.Media.BrushConverter
-$Brush = @{ Green = $BC.ConvertFromString('#FF34C759'); Amber = $BC.ConvertFromString('#FFFF9F0A'); Red = $BC.ConvertFromString('#FFFF453A'); Dim = $BC.ConvertFromString('#80FFFFFF'); Pin = $BC.ConvertFromString('#FFFFB340') }
+$Brush = @{ Green = $BC.ConvertFromString('#FF34C759'); Amber = $BC.ConvertFromString('#FFFF9F0A'); Red = $BC.ConvertFromString('#FFFF453A'); Dim = $BC.ConvertFromString('#80FFFFFF'); Pin = $BC.ConvertFromString('#FFFFB340'); Ok = $BC.ConvertFromString('#B334C759') }
 function Get-Level([double]$remain) { if ($remain -le 20) { 'Red' } elseif ($remain -le 50) { 'Amber' } else { 'Green' } }
 
 function Format-Tokens([long]$n) {
@@ -637,97 +703,194 @@ function Format-Tokens([long]$n) {
     if ($n -ge 1e4) { return ($n / 1e3).ToString('0.0', $ci) + 'K' }
     return $n.ToString('N0', $ci)
 }
-function Format-Reset($reset, [bool]$long) {
-    $span = $reset - [DateTimeOffset]::Now
-    if ($span.TotalSeconds -le 0) { return $T.ResetNow }
-    if ($span.TotalDays -ge 1) { $cd = $T.DaysHours -f [int][Math]::Floor($span.TotalDays), $span.Hours }
-    else { $cd = '{0:00}:{1:00}:{2:00}' -f [int][Math]::Floor($span.TotalHours), $span.Minutes, $span.Seconds }
-    $local = $reset.LocalDateTime
-    $at = if ($long) { $local.ToString('M/d HH:mm') } else { $local.ToString('HH:mm') }
-    return $T.ResetIn -f $cd, $at
+# a duration in words, no seconds: "35 min", "4h 24m", "5d 23h"
+function Format-Span([TimeSpan]$s) {
+    if ($s.TotalMinutes -lt 1) { $s = [TimeSpan]::FromMinutes(1) }
+    if ($s.TotalDays -ge 1) { return $T.DaysHours -f [int][Math]::Floor($s.TotalDays), $s.Hours }
+    if ($s.TotalHours -ge 1) { return $T.HrMin -f [int][Math]::Floor($s.TotalHours), $s.Minutes }
+    return $T.Min -f [int][Math]::Ceiling($s.TotalMinutes)
 }
-
-# draws one quota bar; returns remaining % or $null
-function Set-Bar($key, $w, [bool]$long) {
-    $pct = $UI["${key}_Pct"]; $bar = $UI["${key}_Bar"]; $fill = $UI["${key}_Fill"]; $rst = $UI["${key}_Reset"]
-    if (-not $w) {
-        $pct.Text = '—'; $pct.Foreground = $Brush.Dim; $rst.Text = $T.NoData
-        $bar.ColumnDefinitions[0].Width = New-Object System.Windows.GridLength(0, 'Star')
-        $bar.ColumnDefinitions[1].Width = New-Object System.Windows.GridLength(1, 'Star')
-        return $null
-    }
-    $used = $w.Used
-    $expired = ($w.Reset -and $w.Reset -le [DateTimeOffset]::Now)
-    if ($expired) { $used = 0 }
-    $remain = [Math]::Max(0, [Math]::Min(100, 100 - $used))
-    $lvl = Get-Level $remain
+# an estimate in rounded words: under an hour to 5 minutes, under a day to half an hour, else to half a day
+function Format-Approx([TimeSpan]$s) {
+    $ci = [Globalization.CultureInfo]::InvariantCulture
+    $m = $s.TotalMinutes
+    if ($m -lt 55) { return $T.ApproxMin -f [int]([Math]::Max(5, [Math]::Round($m / 5) * 5)) }
+    if ($s.TotalHours -lt 23.75) { return $T.ApproxHr -f ([Math]::Max(1, [Math]::Round($s.TotalHours * 2) / 2)).ToString('0.#', $ci) }
+    return $T.ApproxDay -f ([Math]::Round($s.TotalDays * 2) / 2).ToString('0.#', $ci)
+}
+function Set-BarWidth($bar, [double]$remain) {
     $bar.ColumnDefinitions[0].Width = New-Object System.Windows.GridLength($remain, 'Star')
     $bar.ColumnDefinitions[1].Width = New-Object System.Windows.GridLength((100 - $remain), 'Star')
-    $fill.Background = $Brush[$lvl]
-    $pct.Foreground = $Brush[$lvl]
-    $pct.Text = $T.Remaining -f $remain
-    if ($expired) { $rst.Text = $T.WindowReset }
-    elseif ($w.Reset) { $rst.Text = (Format-Reset $w.Reset $long) + '  ·  ' + ($T.Used -f $used) }
-    else { $rst.Text = $T.NotStarted -f $used }
-    return $remain
+}
+
+# one quota window as shown: remaining %, reset, and the window length for the pace estimate
+function Get-View($w, $len, [string]$name, [string]$pname, [string]$short) {
+    if (-not $w) { return $null }
+    $used = $w.Used
+    $expired = [bool]($w.Reset -and $w.Reset -le [DateTimeOffset]::Now)
+    if ($expired) { $used = 0 }
+    $remain = [Math]::Max(0, [Math]::Min(100, 100 - $used))
+    return @{ Remain = $remain; Used = $used; Reset = $w.Reset; Expired = $expired; Len = $len; Name = $name; PName = $pname; Short = $short; W = $w }
+}
+function Get-ResetText($v) {
+    if ($v.Expired) { return $T.WindowReset }
+    if (-not $v.Reset) { return $T.NotStarted }
+    $span = $v.Reset - [DateTimeOffset]::Now
+    if ($span.TotalSeconds -le 0) { return $T.ResetNow }
+    return $T.ResetIn -f (Format-Span $span)
+}
+function Get-ResetTip($v) {
+    if (-not $v -or -not $v.Reset -or $v.Expired) { return $null }
+    return $T.ResetAt -f $v.Reset.LocalDateTime.ToString('M/d HH:mm')
+}
+
+# Will this window last until it resets? Uses the average rate since the window started, which for
+# a long window also allows for the hours you are not working. $null = too early to say.
+function Get-Pace($v) {
+    if (-not $v -or $v.Expired -or -not $v.Reset -or -not $v.Len) { return $null }
+    $now = [DateTimeOffset]::Now
+    if ($v.Remain -le 0) { return @{ Empty = $true; V = $v } }
+    $elapsed = ($now - $v.Reset.AddMinutes(-$v.Len)).TotalMinutes
+    if ($elapsed -lt [Math]::Max(15, $v.Len * 0.05)) { return $null }   # 5h: after 15 min, weekly: after ~8 h
+    if ($v.Used -le 0) { return @{ Out = $false; V = $v } }
+    $emptyAt = $now.AddMinutes($v.Remain / ($v.Used / $elapsed))
+    if ($emptyAt -ge $v.Reset) { return @{ Out = $false; V = $v } }
+    return @{ Out = $true; V = $v; In = ($emptyAt - $now); Early = ($v.Reset - $emptyAt); At = $emptyAt }
+}
+
+# draws one service: the tighter of its two limits is the big number, the other one sits below it
+function Set-Section([string]$p, $h5, $d7, [long]$today, [string]$detail) {
+    $views = @(@($h5, $d7) | Where-Object { $_ })
+    $hero = $null; $sec = $null
+    if ($views.Count -gt 0) {
+        $hero = $views[0]
+        foreach ($v in $views) { if ($v.Remain -lt $hero.Remain) { $hero = $v } }
+        foreach ($v in $views) { if (-not [object]::ReferenceEquals($v, $hero)) { $sec = $v } }
+    }
+    $big = $UI["${p}_Hero"]
+    if ($hero) {
+        $lvl = Get-Level $hero.Remain
+        $big.Text = '{0:0}%' -f $hero.Remain; $big.Foreground = $Brush[$lvl]
+        $UI["${p}_HeroLbl"].Text = $T.HeroLbl -f $hero.Name
+        $UI["${p}_HeroReset"].Text = Get-ResetText $hero
+        $UI["${p}_HeroReset"].ToolTip = Get-ResetTip $hero
+        $UI["${p}_Fill"].Background = $Brush[$lvl]
+        Set-BarWidth $UI["${p}_Bar"] $hero.Remain
+    } else {
+        $big.Text = '—'; $big.Foreground = $Brush.Dim
+        $UI["${p}_HeroLbl"].Text = $T.NoData; $UI["${p}_HeroReset"].Text = ' '; $UI["${p}_HeroReset"].ToolTip = $null
+        Set-BarWidth $UI["${p}_Bar"] 0
+    }
+    if ($sec) {
+        $UI["${p}_SecBox"].Visibility = 'Visible'
+        $UI["${p}_Sec"].Text = $T.SecFmt -f $sec.Short, $sec.Remain, (Get-ResetText $sec)
+        $UI["${p}_Sec"].ToolTip = Get-ResetTip $sec
+        $UI["${p}_Fill2"].Background = $Brush[(Get-Level $sec.Remain)]
+        Set-BarWidth $UI["${p}_Bar2"] $sec.Remain
+    } else { $UI["${p}_SecBox"].Visibility = 'Collapsed' }
+
+    # pace: warn about the window that runs out first; otherwise say both will last
+    $pace = $UI["${p}_Pace"]
+    $pc = @($views | ForEach-Object { Get-Pace $_ } | Where-Object { $_ })
+    $empty = $pc | Where-Object { $_.Empty } | Select-Object -First 1
+    $out = $pc | Where-Object { $_.Out } | Sort-Object { $_.At } | Select-Object -First 1
+    if ($empty) {
+        $pace.Text = $T.PaceEmpty -f $empty.V.Name; $pace.Foreground = $Brush.Red; $pace.Visibility = 'Visible'
+    } elseif ($out) {
+        # the big number's own limit needs no name: it is written right above
+        if ([object]::ReferenceEquals($out.V, $hero)) { $pace.Text = $T.PaceOutSelf -f (Format-Approx $out.In), (Format-Approx $out.Early) }
+        else { $pace.Text = $T.PaceOut -f $out.V.Name, (Format-Approx $out.In), (Format-Approx $out.Early) }
+        $pace.Foreground = $(if ($out.In.TotalMinutes -le 30) { $Brush.Red } else { $Brush.Amber }); $pace.Visibility = 'Visible'
+    } elseif ($pc.Count -gt 0) {
+        $pace.Text = $T.PaceOk; $pace.Foreground = $Brush.Ok; $pace.Visibility = 'Visible'
+    } else { $pace.Visibility = 'Collapsed' }
+
+    # today's tokens: a quiet line, details on hover, nothing at all when there is nothing to count
+    $td = $UI["${p}_Today"]
+    if ($today -gt 0) { $td.Text = $T.Today -f (Format-Tokens $today); $td.ToolTip = $detail; $td.Visibility = 'Visible' }
+    else { $td.Visibility = 'Collapsed' }
 }
 
 function Plan-Name([string]$p) { if (-not $p) { return '—' }; return $p.Substring(0,1).ToUpper() + $p.Substring(1) }
 
 function Render {
     $c = $S.Claude
-    $UI.C_Today.Text = Format-Tokens ($c.In + $c.Out + $c.CW + $c.CR)
-    $UI.C_Detail.Text = $T.ClaudeDetail -f (Format-Tokens $c.In), (Format-Tokens $c.Out), (Format-Tokens ($c.CW + $c.CR))
     $UI.C_Plan.Text = Plan-Name $S.CQ.Plan
-    $cr5 = Set-Bar 'C_H5' $S.CQ.H5 $false
-    $cr7 = Set-Bar 'C_D7' $S.CQ.D7 $true
+    $c5 = Get-View $S.CQ.H5 $ClaudeLen.H5 $T.H5 $T.H5P $T.H5Short
+    $c7 = Get-View $S.CQ.D7 $ClaudeLen.D7 $T.D7 $T.D7P $T.D7Short
+    Set-Section 'C' $c5 $c7 ($c.In + $c.Out + $c.CW + $c.CR) ($T.ClaudeDetail -f (Format-Tokens $c.In), (Format-Tokens $c.Out), (Format-Tokens ($c.CW + $c.CR)))
     $cmsg = if ($S.CQ.Msg) { $T[$S.CQ.Msg] } else { '' }
-    if ($cmsg -and $S.CQ.Msg -ne 'Fetching' -and $S.CQ.AsOf -and ($S.CQ.H5 -or $S.CQ.D7)) { $cmsg += ($T.AsOf -f $S.CQ.AsOf.ToString('M/d HH:mm')) }
-    if (-not $cmsg -and -not $c.Found) { $cmsg = $T.NoClaudeLogs }
+    if ($cmsg -and $S.CQ.Msg -ne 'Fetching' -and $S.CQ.AsOf -and ($S.CQ.H5 -or $S.CQ.D7)) { $cmsg += "`n" + ($T.AsOf -f $S.CQ.AsOf.ToString('M/d HH:mm')) }
     if ($cmsg) { $UI.C_Msg.Text = $cmsg; $UI.C_Msg.Visibility = 'Visible' } else { $UI.C_Msg.Visibility = 'Collapsed' }
+    # first run (or a login that has really ended): offer to sign in right here instead of pointing at the README
+    if (@('NoCred', 'Expired', 'Invalid') -contains $S.CQ.Msg) {
+        $UI.C_Connect.Content = $(if ($S.CQ.Msg -eq 'NoCred') { $T.Connect } else { $T.Relogin })
+        $UI.C_Connect.Visibility = 'Visible'
+    } else { $UI.C_Connect.Visibility = 'Collapsed' }
 
     $x = $S.Codex
-    $UI.X_Today.Text = Format-Tokens $x.Total
-    $UI.X_Detail.Text = $T.CodexDetail -f (Format-Tokens $x.In), (Format-Tokens $x.Cached), (Format-Tokens $x.Out)
     $UI.X_Plan.Text = Plan-Name $x.Plan
-    $xr5 = Set-Bar 'X_H5' $x.H5 $false
-    $xr7 = Set-Bar 'X_D7' $x.D7 $true
+    $x5 = Get-View $x.H5 $(if ($x.H5) { $x.H5.Len }) $T.H5 $T.H5P $T.H5Short
+    $x7 = Get-View $x.D7 $(if ($x.D7) { $x.D7.Len }) $T.D7 $T.D7P $T.D7Short
+    Set-Section 'X' $x5 $x7 $x.Total ($T.CodexDetail -f (Format-Tokens $x.In), (Format-Tokens $x.Cached), (Format-Tokens $x.Out))
     if (-not $x.Found) { $UI.X_Msg.Text = $T.NoCodexDir -f $CodexDir; $UI.X_Msg.Visibility = 'Visible' }
     elseif (-not $x.H5) { $UI.X_Msg.Text = $T.NoCodexRecent; $UI.X_Msg.Visibility = 'Visible' }
     else { $UI.X_Msg.Visibility = 'Collapsed' }
 
-    if ($S.LastUpdate) { $UI.Footer.Text = $T.Footer -f $S.LastUpdate.ToString('HH:mm:ss'), $Cfg.LocalRefreshSec }
-
-    $worst = 100
-    foreach ($v in @($cr5, $cr7, $xr5, $xr7)) { if ($null -ne $v -and $v -lt $worst) { $worst = $v } }
-    Set-TrayLevel (Get-Level $worst)
+    $worst = $null
+    foreach ($v in @($c5, $c7, $x5, $x7)) { if ($v -and ($null -eq $worst -or $v.Remain -lt $worst)) { $worst = $v.Remain } }
+    Set-TrayLevel (Get-Level $(if ($null -eq $worst) { 100 } else { $worst }))
+    if ($MarkerNum) {
+        foreach ($k in 'C','X') {
+            $pair = if ($k -eq 'C') { @($c5, $c7) } else { @($x5, $x7) }
+            $m = $null; foreach ($v in $pair) { if ($v -and ($null -eq $m -or $v.Remain -lt $m)) { $m = $v.Remain } }
+            if ($null -eq $m) { $MarkerNum[$k].Text = '—'; $MarkerNum[$k].Foreground = $Brush.Dim }
+            else { $MarkerNum[$k].Text = '{0:0}' -f $m; $MarkerNum[$k].Foreground = $Brush[(Get-Level $m)] }
+        }
+    }
     $tip = $AppName
-    if ($null -ne $cr5) { $tip += "`n" + ($T.Tip5h -f 'Claude', $cr5) }
-    if ($null -ne $xr5) { $tip += "`n" + ($T.Tip5h -f 'Codex', $xr5) }
+    if ($c5) { $tip += "`n" + ($T.Tip5h -f 'Claude', $c5.Remain) }
+    if ($x5) { $tip += "`n" + ($T.Tip5h -f 'Codex', $x5.Remain) }
     if ($tip.Length -gt 63) { $tip = $tip.Substring(0, 63) }
     $Tray.Text = $tip
 
-    Check-Alert 'C5' ('Claude Code ' + $T.H5) $cr5 $S.CQ.H5
-    Check-Alert 'C7' ('Claude Code ' + $T.D7) $cr7 $S.CQ.D7
-    Check-Alert 'X5' ('Codex ' + $T.H5)       $xr5 $x.H5
-    Check-Alert 'X7' ('Codex ' + $T.D7)       $xr7 $x.D7
+    foreach ($a in @(@('C5', 'Claude Code', $c5), @('C7', 'Claude Code', $c7), @('X5', 'Codex', $x5), @('X7', 'Codex', $x7))) {
+        if ($a[2]) { Check-Alert $a[0] ($a[1] + ' ' + $a[2].Name) $a[2] }
+    }
 }
 
-function Check-Alert($id, $name, $remain, $w) {
-    if ($null -eq $remain -or -not $w) { return }
-    $winId = if ($w.Reset) { $w.Reset.ToUnixTimeSeconds() } else { 0 }
+function Check-Alert($id, $name, $v) {
+    $winId = if ($v.Reset) { $v.Reset.ToUnixTimeSeconds() } else { 0 }
     $hit = $null
-    foreach ($t in ($Cfg.Thresholds | Sort-Object -Descending)) {
-        if ($remain -le $t) {
+    foreach ($t in ($Thresholds | Sort-Object -Descending)) {
+        if ($v.Remain -le $t) {
             $k = "$id|$winId|$t"
             if (-not $S.Alerted.ContainsKey($k)) { $S.Alerted[$k] = $true; $hit = $t }
         }
     }
     if ($null -ne $hit) {
-        $msg = $T.AlertBody -f $remain
-        if ($w.Reset) { $msg += ' · ' + (Format-Reset $w.Reset $true) }
+        $msg = $T.AlertBody -f $v.Remain
+        if ($v.Reset -and -not $v.Expired) { $msg += ' · ' + (Get-ResetText $v) }
         $Tray.ShowBalloonTip(8000, ($T.AlertTitle -f $name), $msg, [System.Windows.Forms.ToolTipIcon]::Warning)
     }
+}
+
+# ---------- Claude sign-in from the widget ----------
+function Find-ClaudeCliMain {
+    $c = Get-Command claude.exe, claude.cmd, claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($c) { return $c.Source }
+    foreach ($p in @((Join-Path $env:USERPROFILE '.local\bin\claude.exe'), (Join-Path $env:APPDATA 'npm\claude.cmd'))) { if (Test-Path -LiteralPath $p) { return $p } }
+    return $null
+}
+# Opens a normal PowerShell window that signs in with the official CLI (installing it with the official
+# script first if it is missing). The widget notices the new login file by itself and fetches the limits.
+function Start-ClaudeLogin {
+    $exe = Find-ClaudeCliMain
+    $done = "Write-Host ''; Write-Host '" + $T.ConsoleDone.Replace("'", "''") + "'"
+    if ($exe) { $cmd = "& '" + $exe.Replace("'", "''") + "' auth login; " + $done }
+    else { $cmd = 'irm https://claude.ai/install.ps1 | iex; $env:Path += '';'' + (Join-Path $env:USERPROFILE ''.local\bin''); claude auth login; ' + $done }
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))   # no quoting problems with paths or non-ASCII text
+    Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $enc) -WorkingDirectory $env:USERPROFILE
 }
 
 # ---------- tray ----------
@@ -745,7 +908,7 @@ function New-TrayIcon($argb) {
     return [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
 }
 $TrayIcons = @{ Green = New-TrayIcon 0xFF2FB350; Amber = New-TrayIcon 0xFFE8900A; Red = New-TrayIcon 0xFFE5392F }
-function Set-TrayLevel($lvl) { if ($S.TrayLevel -ne $lvl) { $S.TrayLevel = $lvl; $Tray.Icon = $TrayIcons[$lvl]; if ($MarkerBar) { $MarkerBar.Background = $Brush[$lvl] } } }
+function Set-TrayLevel($lvl) { if ($S.TrayLevel -ne $lvl) { $S.TrayLevel = $lvl; $Tray.Icon = $TrayIcons[$lvl]; } }
 
 $Tray = New-Object System.Windows.Forms.NotifyIcon
 $Tray.Icon = $TrayIcons.Green
@@ -798,13 +961,8 @@ function Apply-Language {
     $font = 'Segoe UI Variable Text, Segoe UI'
     if ($T.Font) { $font += ', ' + $T.Font }
     $win.FontFamily = New-Object System.Windows.Media.FontFamily($font)
-    $UI.HeaderText.Text = $T.Header
-    $UI.BtnRefresh.ToolTip = $T.TipRefresh; $UI.BtnPin.ToolTip = $T.TipPin; $UI.BtnHide.ToolTip = $T.TipHide; $UI.BtnKeep.ToolTip = $T.TipKeep
-    foreach ($p in 'C','X') {
-        $UI["${p}_TodayLbl"].Text = $T.Today
-        $UI["${p}_H5_Lbl"].Text = $T.H5
-        $UI["${p}_D7_Lbl"].Text = $T.D7
-    }
+    $UI.BtnPin.ToolTip = $T.TipPin; $UI.BtnHide.ToolTip = $T.TipHide; $UI.BtnKeep.ToolTip = $T.TipKeep
+    $UI.C_Connect.ToolTip = $T.ConnectTip
     $miShow.Text = $T.MenuShow; $miRefresh.Text = $T.MenuRefresh; $miTop.Text = $T.MenuTop
     $miAuto.Text = $T.MenuAuto; $miEdge.Text = $T.MenuEdge; $miFolder.Text = $T.MenuFolder; $miExit.Text = $T.MenuExit
     if ($MarkerHit) { $MarkerHit.ToolTip = $T.MarkerTip }
@@ -850,7 +1008,7 @@ $UI.Root.Add_MouseLeftButtonDown({
     try { $win.DragMove() } catch {}
     try { After-Drag $x0 $y0 } catch { Log "dock: $($_.Exception.Message) @ $($_.InvocationInfo.ScriptLineNumber)" }
 })
-$UI.BtnRefresh.Add_Click({ Refresh-Now })
+$UI.C_Connect.Add_Click({ try { Start-ClaudeLogin } catch { Log "login: $_" } })
 $UI.BtnPin.Add_Click({ Set-Topmost (-not [bool]$Cfg.Topmost) })
 $UI.BtnKeep.Add_Click({ try { Toggle-KeepShown } catch { Log "keep shown: $_" } })
 $UI.BtnHide.Add_Click({ $DockTimer.Stop(); $win.Hide(); $Marker.Hide() })
@@ -869,22 +1027,36 @@ $UI.BtnPin.Foreground = $(if ($win.Topmost) { $Brush.Pin } else { $Brush.Dim })
 # ---------- edge docking: drag to a screen edge to tuck the widget away behind a small marker ----------
 # Worked out in screen pixels (WinForms) and converted to WPF units for placing windows.
 $CardMargin = 12          # transparent margin (shadow room) between the window edge and the visible card
-$MarkerLong = 64; $MarkerThick = 12; $MarkerBarThick = 5
+# the marker is a small tab on the edge that shows how much is left for each service (its tighter limit), so you can
+# read both without opening the widget; the dot is the service's color, the number is colored by how much is left
+$MarkerSide = @{ W = 42; H = 42 }; $MarkerTop = @{ W = 84; H = 24 }
 
 $MarkerXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Token Gauge marker" WindowStyle="None" AllowsTransparency="True" Background="Transparent"
-        ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True" ShowActivated="False" Width="12" Height="64">
+        ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True" ShowActivated="False" Width="42" Height="42">
   <Border x:Name="Hit" Background="#01000000" Cursor="Hand">
-    <Border x:Name="Bar" CornerRadius="3" Background="#FF34C759" Opacity="0.55"/>
+    <Border x:Name="Bar" CornerRadius="0,8,8,0" Background="#F51B1D22" BorderBrush="#33FFFFFF" BorderThickness="1" Opacity="0.85">
+      <StackPanel x:Name="Stack" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal" Margin="2,1,2,1">
+          <Ellipse Width="6" Height="6" Fill="#FFE0875F" VerticalAlignment="Center" Margin="0,0,4,0"/>
+          <TextBlock x:Name="NumC" Text="—" Foreground="#80FFFFFF" FontSize="12" FontWeight="Bold" FontFamily="Segoe UI"/>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Margin="2,1,2,1">
+          <Ellipse Width="6" Height="6" Fill="#FF6E8BFF" VerticalAlignment="Center" Margin="0,0,4,0"/>
+          <TextBlock x:Name="NumX" Text="—" Foreground="#80FFFFFF" FontSize="12" FontWeight="Bold" FontFamily="Segoe UI"/>
+        </StackPanel>
+      </StackPanel>
+    </Border>
   </Border>
 </Window>
 '@
 $Marker = [Windows.Markup.XamlReader]::Parse($MarkerXaml)
-$MarkerHit = $Marker.FindName('Hit'); $MarkerBar = $Marker.FindName('Bar')
+$MarkerHit = $Marker.FindName('Hit'); $MarkerBar = $Marker.FindName('Bar'); $MarkerStack = $Marker.FindName('Stack')
+$MarkerNum = @{ C = $Marker.FindName('NumC'); X = $Marker.FindName('NumX') }
 $MarkerHit.Add_MouseEnter({ $MarkerBar.Opacity = 1.0 })
-$MarkerHit.Add_MouseLeave({ $MarkerBar.Opacity = 0.55 })
+$MarkerHit.Add_MouseLeave({ $MarkerBar.Opacity = 0.85 })
 $MarkerHit.Add_MouseLeftButtonUp({ try { Show-Docked } catch { Log "dock show: $_" } })
 
 function To-Px([double]$x, [double]$y) {
@@ -947,16 +1119,17 @@ function Clamp([double]$v, [double]$lo, [double]$hi) { if ($hi -lt $lo) { return
 function Place-Marker {
     $g = Get-DockGeometry; $e = $Cfg.Dock.Edge
     if ($e -eq 'top') {
-        $Marker.Width = $MarkerLong; $Marker.Height = $MarkerThick
-        $Marker.Left = Clamp ($g.X - $MarkerLong / 2) $g.L ($g.R - $MarkerLong); $Marker.Top = $g.T
-        $MarkerBar.Width = [double]::NaN; $MarkerBar.Height = $MarkerBarThick
-        $MarkerBar.HorizontalAlignment = 'Stretch'; $MarkerBar.VerticalAlignment = 'Top'
+        $Marker.Width = $MarkerTop.W; $Marker.Height = $MarkerTop.H
+        $Marker.Left = Clamp ($g.X - $MarkerTop.W / 2) $g.L ($g.R - $MarkerTop.W); $Marker.Top = $g.T
+        $MarkerBar.CornerRadius = New-Object System.Windows.CornerRadius(0, 0, 8, 8); $MarkerStack.Orientation = 'Horizontal'
     } else {
-        $Marker.Width = $MarkerThick; $Marker.Height = $MarkerLong
-        $Marker.Top = Clamp ($g.Y - $MarkerLong / 2) $g.T ($g.B - $MarkerLong)
-        $Marker.Left = $(if ($e -eq 'left') { $g.L } else { $g.R - $MarkerThick })
-        $MarkerBar.Height = [double]::NaN; $MarkerBar.Width = $MarkerBarThick
-        $MarkerBar.VerticalAlignment = 'Stretch'; $MarkerBar.HorizontalAlignment = $(if ($e -eq 'left') { 'Left' } else { 'Right' })
+        $Marker.Width = $MarkerSide.W; $Marker.Height = $MarkerSide.H; $MarkerStack.Orientation = 'Vertical'
+        $Marker.Top = Clamp ($g.Y - $MarkerSide.H / 2) $g.T ($g.B - $MarkerSide.H)
+        if ($e -eq 'left') {
+            $Marker.Left = $g.L; $MarkerBar.CornerRadius = New-Object System.Windows.CornerRadius(0, 8, 8, 0)
+        } else {
+            $Marker.Left = $g.R - $MarkerSide.W; $MarkerBar.CornerRadius = New-Object System.Windows.CornerRadius(8, 0, 0, 8)
+        }
     }
 }
 # put the card flush against the docked edge, next to where the marker is
@@ -1046,8 +1219,12 @@ $MarkerHit.ToolTip = $T.MarkerTip
 function Tick {
     if ((Get-Date).Date -ne $S.Day) { Reset-Day; $S.NextLocal = [DateTime]::MinValue }
     $now = [DateTime]::UtcNow
-    if ($now -ge $S.NextLocal) { Update-Local; $S.NextLocal = $now.AddSeconds([double]$Cfg.LocalRefreshSec) }
-    if ($now -ge $S.NextQuota) { Start-ClaudeQuotaFetch; $S.NextQuota = $now.AddSeconds([double]$Cfg.QuotaRefreshSec) }
+    if ($now -ge $S.NextLocal) { Update-Local; $S.NextLocal = $now.AddSeconds($LocalRefreshSec) }
+    # a new or renewed Claude login (e.g. right after signing in from the widget): fetch the limits at once
+    $stamp = 0; try { if (Test-Path -LiteralPath $ClaudeCred) { $stamp = [IO.File]::GetLastWriteTimeUtc($ClaudeCred).Ticks } } catch {}
+    if ($null -ne $S.CredStamp -and $stamp -ne $S.CredStamp -and $stamp -ne 0) { $S.NextQuota = [DateTime]::MinValue }
+    $S.CredStamp = $stamp
+    if ($now -ge $S.NextQuota) { Start-ClaudeQuotaFetch; $S.NextQuota = $now.AddSeconds($QuotaRefreshSec) }
     Poll-ClaudeQuota
     Render
 }
