@@ -46,7 +46,7 @@ irm https://claude.ai/install.ps1 | iex   # 用官方安装脚本装 Claude Code
 claude                                     # 选择 "Claude account with subscription" 并登录
 ```
 
-每次运行 `claude` 时，这个令牌会自动续期。如果很久没运行，悬浮窗会提示令牌已过期，运行一次 `claude` 就能恢复。Token Gauge 只**读取**令牌，从不修改它。
+这个令牌只有几个小时有效期，Token Gauge 会自动帮你续期：令牌快过期时，它会在后台运行一次 `claude auth status`（不弹窗、不消耗额度、最多每 10 分钟一次），由官方命令行工具完成续期。Token Gauge 只**读取**令牌，从不修改它。
 
 ## 数据来源
 
@@ -65,6 +65,7 @@ claude                                     # 选择 "Claude account with subscri
 ## 隐私
 
 - 只读取你用户目录下的本地文件，以及上面那一个 Anthropic 用量接口。
+- Claude Code 的登录令牌快过期时，会在后台运行官方的 `claude auth status` 命令，由命令行工具完成续期。
 - 不向其他任何地方发送数据，没有统计，也不检查更新。
 - 设置和错误日志保存在 `%APPDATA%\TokenGauge`。
 
@@ -97,7 +98,7 @@ claude                                     # 选择 "Claude account with subscri
 
 - **悬浮窗没出现**：先看托盘（点 `^` 展开隐藏图标）。在终端运行 `powershell -ExecutionPolicy Bypass -STA -File "%LOCALAPPDATA%\Programs\TokenGauge\TokenGauge.ps1"` 可以看到报错，也可以查看 `%APPDATA%\TokenGauge\error.log`。
 - **Claude 提示"未找到登录信息"**：在 Claude Code 命令行版里登录一次，见上文。
-- **Claude 提示"登录令牌已过期"，额度条为空或数据不是最新**：Claude Code 命令行版的登录令牌只有几个小时有效期，运行 `claude` 时才会自动续期。打开终端运行 `claude`，输入 `/exit` 退出，再点悬浮窗右上角的刷新按钮（⟳）即可，这一步不消耗额度。续期之前，悬浮窗会继续显示最后一次获取到的额度并注明时间；刚安装、还没成功获取过一次的话，暂时没有数据可显示。
+- **Claude 提示"登录令牌已过期"，额度条为空或数据不是最新**：悬浮窗会自动续期令牌（见上文），一般几分钟内就会恢复。如果一直不恢复，在终端运行 `claude auth status`，再点悬浮窗右上角的刷新按钮（⟳），这一步不消耗额度。还不行的话，可能是登录状态本身已失效，运行 `claude` 重新登录即可。恢复之前，悬浮窗会继续显示最后一次获取到的额度并注明时间。
 - **Codex 的今日用量或额度不再更新**：已在 0.1.1 修复。旧版本会漏掉跨过午夜的 Codex 会话，因为 Codex 会一直占用日志文件，Windows 不会更新被占用文件的修改时间。请更新到最新版本。
 - **过了午夜，"今日 tokens"变回很小的数字**：属于正常现象。"今日 tokens"从本地时间 0 点开始计算；套餐额度不受影响，按各自的 5 小时和每周周期计算。
 - **Claude 提示"网络错误"**：悬浮窗使用系统代理设置，请确认能访问 `api.anthropic.com`。

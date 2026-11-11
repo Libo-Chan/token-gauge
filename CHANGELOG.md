@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 - 2026-11-11
+
+- Claude plan limits keep updating on their own. The Claude Code CLI's login token only lasts a few hours; when it is about to expire (or has expired), Token Gauge now runs `claude auth status` in the background, which makes the official CLI renew it, and fetches the limits again. No window opens, no quota is used, and it runs at most once every 10 minutes. Token Gauge still only reads the token.
+
 ## 0.2.0 - 2026-11-08
 
 - New: edge auto-hide. Drag the widget to the left, right or top edge of the screen and let go: it tucks away and leaves a small translucent marker where you dropped it. Click the marker to bring the widget back; it hides again when the mouse leaves. Drag it away from the edge to keep it on screen as before.

@@ -5,7 +5,7 @@
 
 $ErrorActionPreference = 'Stop'
 $AppName    = 'Token Gauge'
-$AppVersion = '0.2.0'
+$AppVersion = '0.2.1'
 $MainScript = $PSCommandPath
 $ScriptDir  = $PSScriptRoot
 
@@ -200,6 +200,7 @@ $S = @{
     Codex  = @{ In = [long]0; Cached = [long]0; Out = [long]0; Total = [long]0; Found = $false; RateTs = ''; H5 = $null; D7 = $null; Plan = '' }
     CQ = @{ H5 = $null; D7 = $null; Plan = ''; Msg = 'Fetching'; AsOf = $null }   # Msg holds a key into $T
     ClaudeDirs = $null; ClaudeDirsAt = $null
+    CliAt = $null
     Http = $null
     NextLocal = [DateTime]::MinValue
     NextQuota = [DateTime]::MinValue
@@ -387,19 +388,58 @@ function Update-Local {
 # Reads the token Claude Code saved after `claude` login and asks the same usage endpoint Claude Code uses.
 # The token is never modified or refreshed here; Claude Code itself renews it whenever you run it.
 $FetchScript = {
-    param($credPath, $ua)
-    $out = @{ ok = $false; err = ''; code = 0; plan = ''; data = $null }
+    param($credPath, $ua, $allowCli)
+    $out = @{ ok = $false; err = ''; code = 0; plan = ''; data = $null; cliRan = $false }
+
+    # The login token in .credentials.json only lasts a few hours; Claude Code renews it whenever it runs.
+    # `claude auth status` is enough to make it do that, and it uses no quota. Token Gauge itself never
+    # writes the token: it only asks the official CLI to refresh it, then reads it again.
+    function Find-ClaudeCli {
+        $c = Get-Command claude.exe, claude.cmd, claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($c) { return $c.Source }
+        foreach ($p in @((Join-Path $env:USERPROFILE '.local\bin\claude.exe'), (Join-Path $env:APPDATA 'npm\claude.cmd'))) { if (Test-Path -LiteralPath $p) { return $p } }
+        return $null
+    }
+    function Invoke-ClaudeAuthStatus {
+        $exe = Find-ClaudeCli
+        if (-not $exe) { return $false }
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        if ($exe -like '*.cmd') { $psi.FileName = $env:ComSpec; $psi.Arguments = '/d /c ""{0}" auth status"' -f $exe }
+        else { $psi.FileName = $exe; $psi.Arguments = 'auth status' }
+        $psi.WorkingDirectory = $env:USERPROFILE
+        # Run it in a hidden console and do NOT redirect its output: with redirected output the CLI sees
+        # no terminal, just prints its status as JSON and skips renewing the token.
+        $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+        $proc = [Diagnostics.Process]::Start($psi)
+        if (-not $proc.WaitForExit(45000)) { try { $proc.Kill() } catch {}; return $false }
+        return $true
+    }
+    function Read-Token { ([IO.File]::ReadAllText($credPath, [Text.Encoding]::UTF8) | ConvertFrom-Json).claudeAiOauth }
+    function Test-ExpiringSoon($o) { $o.expiresAt -and ([DateTimeOffset]::FromUnixTimeMilliseconds([long]$o.expiresAt) -lt [DateTimeOffset]::UtcNow.AddMinutes(5)) }
+    function Get-Usage($o) {
+        $h = @{ 'Authorization' = "Bearer $($o.accessToken)"; 'anthropic-beta' = 'oauth-2025-04-20'; 'Accept' = 'application/json' }
+        Invoke-RestMethod -Uri 'https://api.anthropic.com/api/oauth/usage' -Headers $h -Method Get -TimeoutSec 20 -UseBasicParsing -UserAgent $ua
+    }
+
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         if (-not (Test-Path -LiteralPath $credPath)) { $out.err = 'nocred'; return $out }
-        $o = ([IO.File]::ReadAllText($credPath, [Text.Encoding]::UTF8) | ConvertFrom-Json).claudeAiOauth
+        $o = Read-Token
         if (-not $o -or -not $o.accessToken) { $out.err = 'nocred'; return $out }
         $out.plan = [string]$o.subscriptionType
-        if ($o.expiresAt) {
-            if ([DateTimeOffset]::FromUnixTimeMilliseconds([long]$o.expiresAt) -lt [DateTimeOffset]::UtcNow) { $out.err = 'expired'; return $out }
+        if ((Test-ExpiringSoon $o) -and $allowCli) {
+            $out.cliRan = $true
+            if (Invoke-ClaudeAuthStatus) { $o = Read-Token }
         }
-        $h = @{ 'Authorization' = "Bearer $($o.accessToken)"; 'anthropic-beta' = 'oauth-2025-04-20'; 'Accept' = 'application/json' }
-        $out.data = Invoke-RestMethod -Uri 'https://api.anthropic.com/api/oauth/usage' -Headers $h -Method Get -TimeoutSec 20 -UseBasicParsing -UserAgent $ua
+        if ($o.expiresAt -and [DateTimeOffset]::FromUnixTimeMilliseconds([long]$o.expiresAt) -lt [DateTimeOffset]::UtcNow) { $out.err = 'expired'; return $out }
+        try { $out.data = Get-Usage $o }
+        catch {
+            $code = 0; try { $code = [int]$_.Exception.Response.StatusCode } catch {}
+            if ($code -eq 401 -and $allowCli -and -not $out.cliRan) {
+                $out.cliRan = $true
+                if (Invoke-ClaudeAuthStatus) { $o = Read-Token; $out.data = Get-Usage $o } else { throw }
+            } else { throw }
+        }
         $out.ok = $true
     } catch {
         $out.err = $_.Exception.Message
@@ -412,7 +452,8 @@ function Start-ClaudeQuotaFetch {
     if ($S.Http) { return }
     $rs = [runspacefactory]::CreateRunspace(); $rs.Open()
     $ps = [powershell]::Create(); $ps.Runspace = $rs
-    [void]$ps.AddScript($FetchScript).AddArgument($ClaudeCred).AddArgument("TokenGauge/$AppVersion")
+    $allowCli = ($null -eq $S.CliAt -or ([DateTime]::UtcNow - $S.CliAt).TotalMinutes -ge 10)   # at most one CLI run per 10 minutes
+    [void]$ps.AddScript($FetchScript).AddArgument($ClaudeCred).AddArgument("TokenGauge/$AppVersion").AddArgument($allowCli)
     $S.Http = @{ PS = $ps; RS = $rs; H = $ps.BeginInvoke() }
 }
 
@@ -454,6 +495,7 @@ function Poll-ClaudeQuota {
     try { $S.Http.PS.Dispose(); $S.Http.RS.Dispose() } catch {}
     $S.Http = $null
     if (-not $res) { return }
+    if ($res.cliRan) { $S.CliAt = [DateTime]::UtcNow }
     if ($res.plan) { $S.CQ.Plan = $res.plan }
     if ($res.ok) {
         $S.CQ.H5 = Convert-ClaudeWindow $res.data.five_hour

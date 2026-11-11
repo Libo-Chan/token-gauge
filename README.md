@@ -47,7 +47,7 @@ irm https://claude.ai/install.ps1 | iex   # install Claude Code CLI (official in
 claude                                     # choose "Claude account with subscription" and sign in
 ```
 
-The CLI renews this token whenever you run `claude`. If you haven't run it for a while the widget will say the token expired. Run `claude` once and it recovers. Token Gauge only **reads** the token and never modifies it.
+This token only lasts a few hours. Token Gauge keeps it fresh by itself: shortly before it expires, it runs `claude auth status` in the background (no window, no quota used, at most once every 10 minutes), which makes the official CLI renew the token. Token Gauge only **reads** the token and never modifies it.
 
 ## Where the numbers come from
 
@@ -66,6 +66,7 @@ Notes:
 ## Privacy
 
 - Reads only local files under your user profile plus the one Anthropic usage endpoint above.
+- When the Claude Code login token is about to expire, it runs the official `claude auth status` command in the background so the CLI renews it.
 - Sends nothing anywhere else. No analytics, no update checks.
 - Settings and an error log live in `%APPDATA%\TokenGauge`.
 
@@ -98,7 +99,7 @@ Environment variables `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected.
 
 - **Nothing appears:** check the tray (click `^` to see hidden icons). Run `powershell -ExecutionPolicy Bypass -STA -File "%LOCALAPPDATA%\Programs\TokenGauge\TokenGauge.ps1"` from a terminal to see errors, and look in `%APPDATA%\TokenGauge\error.log`.
 - **Claude: "login not found":** sign in to the Claude Code CLI, see above.
-- **Claude: "Login token expired" and the bars are empty or old:** the Claude Code CLI's login token only lasts a few hours and is renewed when you run `claude`. Open a terminal, run `claude`, type `/exit`, then click the refresh button (⟳) on the widget. This does not use any of your quota. Until then the widget keeps showing the last limits it fetched, with the time they are from; on a fresh install there is nothing to show until the first successful fetch.
+- **Claude: "Login token expired" and the bars are empty or old:** the widget renews the token automatically (see above), so this should clear up within a few minutes. If it stays, run `claude auth status` in a terminal and click the refresh button (⟳) on the widget; this uses no quota. If that still doesn't help, your sign-in itself may have ended: run `claude` and sign in again. Until then the widget keeps showing the last limits it fetched, with the time they are from.
 - **Codex: today's tokens or limits stop updating:** fixed in 0.1.1. Older versions skipped a Codex session that ran past midnight, because Windows does not refresh the last-write time of a log file that Codex keeps open. Update to the latest release.
 - **"Today" went back to a small number after midnight:** expected. "Tokens today" counts from your local midnight. The plan limits are separate and keep their own 5-hour and weekly windows.
 - **Claude: "network error":** the widget uses your system proxy settings. Make sure `api.anthropic.com` is reachable.
